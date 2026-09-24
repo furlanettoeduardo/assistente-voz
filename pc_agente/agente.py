@@ -146,7 +146,18 @@ class Handler(BaseHTTPRequestHandler):
         pass  # silencia o log padrão; usamos nossos próprios prints
 
 
+class Servidor(ThreadingHTTPServer):
+    # No Windows, SO_REUSEADDR deixa um segundo agente escutar na mesma porta sem erro,
+    # enquanto o antigo continua atendendo com o token e a lista antigos.
+    allow_reuse_address = sys.platform != "win32"
+
+
 if __name__ == "__main__":
+    try:
+        servidor = Servidor(("0.0.0.0", PORTA), Handler)
+    except OSError as e:
+        sys.exit(f"Não consegui escutar na porta {PORTA}: {e}\n"
+                 "Feche o outro agente (ou o programa que usa essa porta) e rode de novo.")
     print(f"[agente] escutando na porta {PORTA}")
     print(f"[agente] programas liberados: {', '.join(sorted(PROGRAMAS))}")
-    ThreadingHTTPServer(("0.0.0.0", PORTA), Handler).serve_forever()
+    servidor.serve_forever()

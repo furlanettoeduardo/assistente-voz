@@ -155,6 +155,13 @@ class TestAgenteHTTP(unittest.TestCase):
         self.assertIn(b" 401 ", resposta.split(b"\r\n", 1)[0])
         self.assertIn("pedido recusado de 127.0.0.1: token inválido", saida.getvalue())
 
+    def test_segundo_agente_na_mesma_porta_e_recusado(self):
+        # No Windows, o SO_REUSEADDR padrão do http.server deixava os dois escutarem sem erro.
+        primeiro = self.agente.Servidor(("127.0.0.1", 0), self.agente.Handler)
+        self.addCleanup(primeiro.server_close)
+        with self.assertRaises(OSError):
+            self.agente.Servidor(("127.0.0.1", primeiro.server_port), self.agente.Handler).server_close()
+
     def test_rota_desconhecida(self):
         self.assertEqual(self.pedir("GET", "/abrir")[0], 404)
         self.assertEqual(self.pedir("POST", "/programas", corpo={})[0], 404)
