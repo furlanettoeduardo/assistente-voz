@@ -1,0 +1,11 @@
+{
+  "token": "TROQUE-ESTE-TOKEN",
+  "porta": 8765,
+  "programas": {
+    "bloco de notas": ["notepad.exe"],
+    "calculadora": ["calc.exe"],
+    "explorador de arquivos": ["explorer.exe"],
+    "chrome": ["cmd", "/c", "start", "", "chrome"],
+    "spotify": ["cmd", "/c", "start", "", "spotify:"]
+  }
+}
