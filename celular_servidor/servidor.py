@@ -136,7 +136,11 @@ def executar_ferramenta(nome: str, args: dict) -> dict:
 
 def limpar(texto: str) -> str:
     """Remove o raciocínio <think>...</think> que alguns modelos Qwen devolvem."""
-    return re.sub(r"<think>.*?</think>", "", texto or "", flags=re.DOTALL).strip()
+    # Um <think> sem fechamento (resposta cortada) vai até o fim do texto.
+    texto = re.sub(r"<think>.*?(?:</think>|$)", "", texto or "", flags=re.DOTALL)
+    # Quando o template do modelo já abre o <think>, só o fechamento aparece: descarta até ele.
+    texto = re.sub(r"^.*?</think>", "", texto, flags=re.DOTALL)
+    return texto.strip()
 
 
 def conversar(texto_usuario: str) -> tuple[str, list[dict]]:

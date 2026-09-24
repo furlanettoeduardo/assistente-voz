@@ -75,6 +75,14 @@ class TestLimparThink(unittest.TestCase):
     def test_conteudo_nulo_vira_vazio(self):
         self.assertEqual(self.limpar(None), "")
 
+    def test_remove_raciocinio_sem_abertura(self):
+        # Quando o template do modelo já abre o <think>, a resposta traz só o fechamento.
+        self.assertEqual(self.limpar("O usuário quer a calculadora.\n</think>\n\nAbrindo a calculadora."),
+                         "Abrindo a calculadora.")
+
+    def test_remove_raciocinio_sem_fechamento(self):
+        self.assertEqual(self.limpar("Certo. <think>\nO usuário quer a calc"), "Certo.")
+
 
 @PRECISA_DEPENDENCIAS
 class TestServidor(unittest.TestCase):
