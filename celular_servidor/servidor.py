@@ -5,11 +5,11 @@ Fluxo: áudio -> Whisper (Groq) -> LLM com ferramentas -> agente do PC -> respos
 
 Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo aparelho.
 """
-import contextlib
-import io
+import errno
 import json
 import logging
 import re
+import socket
 import sys
 import traceback
 from pathlib import Path
@@ -353,19 +353,39 @@ def texto():
     return responder(frase)
 
 
+def abrir_socket(host: str, porta: int) -> socket.socket:
+    """
+    Abre o socket antes de entregá-lo ao Werkzeug, para explicar em português por que não abriu
+    (o Werkzeug só imprime um aviso em inglês e encerra). Sem SO_REUSEADDR no Windows: lá a opção
+    deixa um segundo servidor escutar na mesma porta sem erro, enquanto o antigo continua atendendo.
+    """
+    sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+    if sys.platform != "win32":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((host, porta))
+        sock.listen(128)
+    except OSError as e:
+        sock.close()
+        if e.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", None)):
+            dica = 'Outro servidor já usa essa porta: feche-o ou troque "porta" no config_servidor.json.'
+        elif isinstance(e, socket.gaierror) or e.errno in (errno.EADDRNOTAVAIL,
+                                                             getattr(errno, "WSAEADDRNOTAVAIL", None)):
+            dica = f'"{host}" não é um endereço deste aparelho: deixe "host" como "127.0.0.1" no config_servidor.json.'
+        elif isinstance(e, PermissionError):
+            dica = 'O sistema não deixou usar essa porta: use uma acima de 1024, como 8000.'
+        else:
+            dica = 'Confira "host" e "porta" no config_servidor.json.'
+        sys.exit(f"Não consegui escutar em {host}:{porta} (detalhe técnico: {e}).\n{dica}")
+    return sock
+
+
 if __name__ == "__main__":
     # make_server no lugar de app.run: mesmo servidor do Flask, sem o aviso e o log em inglês.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    aviso = io.StringIO()
-    try:
-        # Com a porta ocupada, o Werkzeug imprime um aviso em inglês e chama sys.exit por conta própria.
-        with contextlib.redirect_stderr(aviso):
-            servidor = make_server(HOST, PORTA, app, threaded=True)
-    except (OSError, SystemExit) as e:
-        detalhe = (aviso.getvalue().strip().splitlines() or [str(e)])[0]
-        sys.exit(f"Não consegui escutar em {HOST}:{PORTA} (detalhe técnico: {detalhe}).\n"
-                 'Feche o outro servidor que usa essa porta ou troque "porta" no config_servidor.json.')
-    print(f"[servidor] pronto: abra http://localhost:{servidor.server_port} no navegador deste aparelho.")
+    sock = abrir_socket(HOST, PORTA)
+    servidor = make_server(HOST, PORTA, app, threaded=True, fd=sock.fileno())
+    print(f"[servidor] pronto: abra http://localhost:{sock.getsockname()[1]} no navegador deste aparelho.")
     print("[servidor] para parar, aperte Ctrl+C.", flush=True)
     servidor.serve_forever()  # o Werkzeug já trata o Ctrl+C
     print("[servidor] encerrado.")

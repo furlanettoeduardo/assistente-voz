@@ -562,16 +562,22 @@ class TestServidorConfig(unittest.TestCase):
         for ingles in ("Serving Flask app", "development server", "Running on", "GET / HTTP"):
             self.assertNotIn(ingles, saida)
 
-    @unittest.skipIf(sys.platform == "win32", "no Windows o SO_REUSEADDR deixa dois servidores na mesma porta")
     def test_porta_ocupada_encerra_com_mensagem(self):
+        # No Windows, o SO_REUSEADDR padrão do Werkzeug deixava o segundo servidor subir sem erro.
         with socket.socket() as ocupada:
             ocupada.bind(("127.0.0.1", 0))
             ocupada.listen()
             saida = self.rodar_servidor({**self.VALIDO, "porta": ocupada.getsockname()[1]})
         self.assertEqual(saida.returncode, 1)
         self.assertIn("Não consegui escutar em 127.0.0.1:", saida.stderr)
-        self.assertIn('troque "porta" no config_servidor.json', saida.stderr)
+        self.assertIn('Outro servidor já usa essa porta: feche-o ou troque "porta"', saida.stderr)
         self.assertNotIn("is in use by another program", saida.stderr)  # aviso do Werkzeug, em inglês
+        self.assertNotIn("Traceback", saida.stderr)
+
+    def test_host_que_nao_e_deste_aparelho(self):
+        saida = self.rodar_servidor({**self.VALIDO, "host": "192.0.2.123"})  # faixa reservada para exemplos
+        self.assertEqual(saida.returncode, 1)
+        self.assertIn('"192.0.2.123" não é um endereço deste aparelho', saida.stderr)
         self.assertNotIn("Traceback", saida.stderr)
 
     def test_config_invalido_encerra_com_mensagem(self):
