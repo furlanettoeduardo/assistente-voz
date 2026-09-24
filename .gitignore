@@ -1,6 +1,9 @@
-# Configurações reais (têm chaves e tokens). Versione só os *.example.json.
-config_agente.json
-config_servidor.json
+# Configurações reais (têm chaves e tokens), inclusive cópias e backups.
+# Versione só os *.example.json.
+config_agente*.json*
+config_servidor*.json*
+!config_agente.example.json
+!config_servidor.example.json
 .env
 .env.*
 !.env.example
