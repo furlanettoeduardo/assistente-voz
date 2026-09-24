@@ -158,8 +158,12 @@ def verificar_modelo(srv) -> bool:
 def explicar_falha_de_api(srv, erro, servico: str, chave: str, *dicas: str) -> None:
     """`erro` é a exceção de rede, a resposta HTTP com erro ou a falha ao ler a lista."""
     requests = srv.requests
+    if isinstance(erro, requests.exceptions.InvalidURL):  # o pedido nem saiu do celular
+        falhou(f"o endereço configurado para {servico} é inválido.",
+               "apague o endereço no config e digite de novo, sem espaços",
+               *dicas)
     # Antes da RequestException: o erro de JSON do requests é das duas classes, e aqui a rede funcionou.
-    if isinstance(erro, (ValueError, KeyError, TypeError)):
+    elif isinstance(erro, (ValueError, KeyError, TypeError)):
         falhou(f"{servico} respondeu, mas não com a lista de modelos esperada (uma página web, talvez).",
                "confira o endereço; a API precisa terminar em /v1, como https://api.groq.com/openai/v1", *dicas)
     elif isinstance(erro, requests.RequestException):

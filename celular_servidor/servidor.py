@@ -77,13 +77,16 @@ def carregar_config(caminho: Path, obrigatorias: dict) -> dict:
 
 
 def url_valida(url: str) -> bool:
-    """http(s)://, um host e, se houver, uma porta que exista."""
+    """http(s)://, um host que o requests consiga usar e, se houver, uma porta que exista."""
     try:
         partes = urlsplit(url)
         partes.port  # levanta ValueError para porta inválida ou colchete sobrando
+        host = partes.hostname or ""
+        host.encode("idna")  # levanta UnicodeError (um ValueError) com rótulo vazio, como em "192.168.0..10"
     except ValueError:
         return False
-    return partes.scheme in ("http", "https") and bool(partes.hostname)
+    return (partes.scheme in ("http", "https") and bool(host) and host.isascii()
+            and not host.startswith((".", "*")) and not any(c.isspace() for c in url))
 
 
 def ler_porta(config: dict, caminho: Path, padrao: int) -> int:

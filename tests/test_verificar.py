@@ -183,6 +183,16 @@ class TestVerificar(unittest.TestCase):
         self.assertIn("FALHOU: o Groq respondeu, mas não com a lista de modelos esperada", saida)
         self.assertNotIn("sem conexão", saida)
 
+    def test_endereco_invalido_nao_diz_que_a_api_respondeu(self):
+        # InvalidURL também é ValueError, mas o pedido nem saiu do celular.
+        self.verificar()
+        srv = sys.modules["servidor"]
+        with contextlib.redirect_stdout(io.StringIO()) as saida:
+            self.modulo.explicar_falha_de_api(srv, srv.requests.exceptions.InvalidURL("host inválido"),
+                                              "a API do LLM", "llm_api_key")
+        self.assertIn("FALHOU: o endereço configurado para a API do LLM é inválido.", saida.getvalue())
+        self.assertNotIn("respondeu", saida.getvalue())
+
     def test_erro_inesperado_tem_codigo_proprio(self):
         def quebrar(*args):
             raise RuntimeError("falha de teste")

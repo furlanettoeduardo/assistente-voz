@@ -500,6 +500,10 @@ class TestServidorConfig(unittest.TestCase):
             ({"pc_url": "192.168.0.10:8765"}, '"pc_url" precisa ser um endereço completo, começando com http://'),
             ({"pc_url": "http://192.168.0.10]:8765"}, '"pc_url" precisa ser um endereço completo'),
             ({"pc_url": "http://:8765"}, '"pc_url" precisa ser um endereço completo'),
+            ({"pc_url": "http://192.168.0..10:8765"}, '"pc_url" precisa ser um endereço completo'),  # ponto duplo
+            ({"pc_url": "http://.192.168.0.10:8765"}, '"pc_url" precisa ser um endereço completo'),
+            ({"pc_url": "http://192.168.0.10​:8765"}, '"pc_url" precisa ser um endereço completo'),
+            ({"llm_base_url": "https://api..groq.com/openai/v1"}, '"llm_base_url" precisa ser um endereço completo'),
             ({"llm_base_url": "https://api.groq.com:99999/openai/v1"}, '"llm_base_url" precisa ser um endereço completo'),
             ({"porta": ""}, '"porta" precisa ser um número entre 0 e 65535'),
             ({"porta": 70000}, '"porta" precisa ser um número entre 0 e 65535'),
