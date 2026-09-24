@@ -107,7 +107,16 @@ class TestVerificar(unittest.TestCase):
         self.assertIn("FALHOU: faltam as bibliotecas: flask.", saida)
         caminho = self.modulo.caminho  # ~/... no Termux, caminho completo nos outros casos
         self.assertIn(f"pip install -r {caminho(self.pasta / 'requirements.txt')}", saida)
-        self.assertIn(f"bash {caminho(self.pasta.parent / 'scripts' / 'termux-instalar.sh')}", saida)
+        if os.name == "posix":
+            self.assertIn(f"bash {caminho(self.pasta.parent / 'scripts' / 'termux-instalar.sh')}", saida)
+        else:  # no Windows não faz sentido sugerir o script do Termux
+            self.assertNotIn("termux-instalar.sh", saida)
+            self.assertIn("ative antes o ambiente virtual (.venv)", saida)
+
+    def test_caminho_com_espaco_vem_entre_aspas(self):
+        self.verificar()
+        texto = self.modulo.caminho(self.pasta / "Área de Trabalho" / "requirements.txt")
+        self.assertTrue(texto.startswith(("'", '"', "~/'")), texto)
 
     def test_valores_de_exemplo(self):
         exemplo = json.loads((PASTA_SERVIDOR / "config_servidor.example.json").read_text(encoding="utf-8"))
@@ -117,7 +126,8 @@ class TestVerificar(unittest.TestCase):
         self.assertIn("ainda com o valor de exemplo: groq_api_key, llm_model.", saida)
         # Caminho completo: no fluxo do README o terminal fica na raiz, não em celular_servidor.
         arquivo = self.modulo.caminho(self.pasta / "config_servidor.json")
-        self.assertIn(f"preencha esses valores em {arquivo} (no Termux: nano {arquivo})", saida)
+        termux = f" (no Termux: nano {arquivo})" if os.name == "posix" else ""
+        self.assertIn(f"preencha esses valores em {arquivo}{termux}\n", saida)
         self.assertIn("PULADO: preencha groq_api_key primeiro.", saida)
         self.assertIn("PULADO: preencha llm_api_key e llm_model primeiro.", saida)
         self.assertEqual(self.llm.pedidos, [], "não deveria chamar a API com chave de exemplo")

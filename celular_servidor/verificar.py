@@ -11,6 +11,7 @@ Código de saída: 0 tudo certo; 1 há problemas, mas o servidor consegue subir;
 import importlib
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -21,13 +22,17 @@ PASTA = Path(__file__).resolve().parent
 
 
 def caminho(arquivo: Path) -> str:
-    """Caminho completo para as dicas (a pasta atual do usuário varia); no Termux, abreviado com ~."""
-    try:
-        if os.name == "posix":
-            return f"~/{arquivo.relative_to(Path.home())}"
-    except ValueError:
-        pass
-    return str(arquivo)
+    """
+    Caminho completo para as dicas (a pasta atual do usuário varia), pronto para colar no terminal:
+    entre aspas se tiver espaço ("OneDrive\\Área de Trabalho") e, no Termux, abreviado com ~.
+    """
+    if os.name == "posix":
+        try:
+            return "~/" + shlex.quote(str(arquivo.relative_to(Path.home())))
+        except ValueError:
+            return shlex.quote(str(arquivo))
+    texto = str(arquivo)
+    return f'"{texto}"' if " " in texto else texto
 REDE_PRIVADA = ("no Windows, a rede Wi-Fi precisa estar como Rede privada: Configurações > Rede e Internet > "
                 "Wi-Fi > propriedades da sua rede > Tipo de perfil de rede")
 
@@ -65,9 +70,13 @@ def verificar_instalacao() -> bool:
         except ImportError:
             faltando.append(modulo)
     if faltando:
-        falhou(f"faltam as bibliotecas: {', '.join(faltando)}.",
-               f"rode: pip install -r {caminho(PASTA / 'requirements.txt')}",
-               f"no Termux, dá para rodar tudo de uma vez: bash {caminho(PASTA.parent / 'scripts' / 'termux-instalar.sh')}")
+        dicas = [f"rode: pip install -r {caminho(PASTA / 'requirements.txt')}"]
+        if os.name == "posix":
+            dicas.append("no Termux, dá para rodar tudo de uma vez: "
+                         f"bash {caminho(PASTA.parent / 'scripts' / 'termux-instalar.sh')}")
+        else:
+            dicas.append("no PC, ative antes o ambiente virtual (.venv)")
+        falhou(f"faltam as bibliotecas: {', '.join(faltando)}.", *dicas)
         return False
     ok(f"Python {sys.version.split()[0]} com Flask e requests instalados.")
     return True
@@ -245,8 +254,10 @@ def main() -> int:
     exemplo = valores_de_exemplo(srv)
     if exemplo:
         arquivo = caminho(srv.ARQUIVO_CONFIG)
-        falhou(f"ainda com o valor de exemplo: {', '.join(exemplo)}.",
-               f"preencha esses valores em {arquivo} (no Termux: nano {arquivo})")
+        dica = f"preencha esses valores em {arquivo}"
+        if os.name == "posix":
+            dica += f" (no Termux: nano {arquivo})"
+        falhou(f"ainda com o valor de exemplo: {', '.join(exemplo)}.", dica)
         problemas += 1
     else:
         ok(f"config_servidor.json válido. O servidor vai abrir em http://localhost:{srv.PORTA}.")
