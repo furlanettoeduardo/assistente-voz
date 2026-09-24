@@ -209,15 +209,35 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(r.get_json()["acoes"], [])
         self.assertNotIn("tools", self.llm.pedidos_de_chat()[0]["json"])
 
-    def test_para_depois_de_tres_rodadas_de_ferramenta(self):
-        chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": "cmd"})
+    def test_ultima_rodada_so_aceita_texto_e_nao_repete_o_programa(self):
+        # O LLM falso insiste na mesma chamada nas 3 rodadas, como um backend que ignora tool_choice.
+        chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA})
         self.llm.programar(chamada, chamada, chamada)
-        r = self.enviar_texto("abre tudo")
+        r = self.enviar_texto("abre o programa de teste")
 
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["resposta"], "Fiz o que consegui, mas algo não saiu como esperado.")
-        self.assertEqual(len(r.get_json()["acoes"]), 3)
-        self.assertEqual(len(self.llm.pedidos_de_chat()), 3)
+        acao, = r.get_json()["acoes"]
+        self.assertEqual(acao["resultado"], {"ok": True, "programa": PROGRAMA})
+        self.popen.assert_called_once()  # abriu uma vez só
+        escolhas = [p["json"]["tool_choice"] for p in self.llm.pedidos_de_chat()]
+        self.assertEqual(escolhas, ["auto", "auto", "none"])
+        # A chamada repetida recebeu o mesmo resultado, sem ir de novo ao agente.
+        ultimo = self.llm.pedidos_de_chat()[2]["json"]["messages"]
+        resultados = [json.loads(m["content"]) for m in ultimo if m["role"] == "tool"]
+        self.assertEqual(resultados, [{"ok": True, "programa": PROGRAMA}] * 2)
+
+    def test_resposta_em_texto_na_ultima_rodada(self):
+        self.llm.programar(
+            resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA}),
+            resposta_ferramenta("chamada-2", "abrir_programa", {"nome": "cmd"}),
+            resposta_texto("<think>ok</think>Abri o programa de teste; o cmd não está na lista."),
+        )
+        r = self.enviar_texto("abre o programa de teste e o cmd")
+
+        self.assertEqual(r.get_json()["resposta"], "Abri o programa de teste; o cmd não está na lista.")
+        self.assertEqual([a["argumentos"]["nome"] for a in r.get_json()["acoes"]], [PROGRAMA, "cmd"])
+        self.popen.assert_called_once()
 
     def test_argumentos_invalidos_do_llm_nao_quebram(self):
         for argumentos in ("{nome: chrome", "null", f'"{PROGRAMA}"', f'["{PROGRAMA}"]', "", None):

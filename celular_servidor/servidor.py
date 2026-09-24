@@ -191,11 +191,15 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
     mensagens = [{"role": "system", "content": sistema},
                  {"role": "user", "content": texto_usuario}]
     acoes = []
+    executadas = {}  # (ferramenta, argumentos) -> resultado
 
-    for _ in range(3):  # no máximo 3 rodadas de ferramenta por comando
+    for rodada in range(1, 4):  # no máximo 3 rodadas por comando
+        ultima = rodada == 3
         payload = {"model": CFG["llm_model"], "messages": mensagens, "temperature": 0.3}
         if ferramentas:
-            payload.update(tools=ferramentas, tool_choice="auto")
+            # Na última rodada o modelo só pode responder em texto: uma ferramenta pedida ali
+            # seria executada sem que o resultado voltasse para ele.
+            payload.update(tools=ferramentas, tool_choice="none" if ultima else "auto")
 
         r = requests.post(f"{LLM_URL}/chat/completions", headers=LLM_HEADERS,
                           json=payload, timeout=60)
@@ -205,18 +209,20 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
 
         if not chamadas:
             return limpar(msg.get("content")), acoes
+        if ultima:  # backend que ignora tool_choice="none": não executa nada
+            return limpar(msg.get("content")) or "Fiz o que consegui, mas algo não saiu como esperado.", acoes
 
         mensagens.append({"role": "assistant", "content": msg.get("content") or "",
                           "tool_calls": chamadas})
         for chamada in chamadas:
             nome = chamada["function"]["name"]
             args = ler_argumentos(chamada["function"].get("arguments"))
-            resultado = executar_ferramenta(nome, args)
-            acoes.append({"ferramenta": nome, "argumentos": args, "resultado": resultado})
+            chave = (nome, json.dumps(args, sort_keys=True))
+            if chave not in executadas:  # modelos pequenos repetem a mesma chamada
+                executadas[chave] = executar_ferramenta(nome, args)
+                acoes.append({"ferramenta": nome, "argumentos": args, "resultado": executadas[chave]})
             mensagens.append({"role": "tool", "tool_call_id": chamada["id"],
-                              "content": json.dumps(resultado, ensure_ascii=False)})
-
-    return "Fiz o que consegui, mas algo não saiu como esperado.", acoes
+                              "content": json.dumps(executadas[chave], ensure_ascii=False)})
 
 
 # ---------- Rotas ----------
