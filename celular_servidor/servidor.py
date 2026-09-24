@@ -7,13 +7,35 @@ Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo
 """
 import json
 import re
+import sys
 from pathlib import Path
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory
 
 BASE = Path(__file__).parent
-CFG = json.loads((BASE / "config_servidor.json").read_text(encoding="utf-8"))
+
+
+def carregar_config(caminho: Path) -> dict:
+    """Lê o JSON de configuração ou encerra explicando o que fazer."""
+    exemplo = caminho.with_name(f"{caminho.stem}.example.json")
+    try:
+        texto = caminho.read_text(encoding="utf-8-sig")  # -sig aceita o BOM do Bloco de Notas
+    except FileNotFoundError:
+        sys.exit(
+            f"Arquivo de configuração não encontrado: {caminho}\n"
+            f"Copie {exemplo.name} para {caminho.name}, na mesma pasta, e preencha os seus dados."
+        )
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError as e:
+        sys.exit(
+            f"Erro de JSON em {caminho}, linha {e.lineno}, coluna {e.colno}: {e.msg}\n"
+            "Confira vírgulas e aspas nos valores."
+        )
+
+
+CFG = carregar_config(BASE / "config_servidor.json")
 
 GROQ_URL = "https://api.groq.com/openai/v1"
 PC_URL = CFG["pc_url"].rstrip("/")

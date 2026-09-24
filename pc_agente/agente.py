@@ -15,7 +15,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BASE = Path(__file__).parent
-CONFIG = json.loads((BASE / "config_agente.json").read_text(encoding="utf-8"))
+
+
+def carregar_config(caminho: Path) -> dict:
+    """Lê o JSON de configuração ou encerra explicando o que fazer."""
+    exemplo = caminho.with_name(f"{caminho.stem}.example.json")
+    try:
+        texto = caminho.read_text(encoding="utf-8-sig")  # -sig aceita o BOM do Bloco de Notas
+    except FileNotFoundError:
+        sys.exit(
+            f"Arquivo de configuração não encontrado: {caminho}\n"
+            f"Copie {exemplo.name} para {caminho.name}, na mesma pasta, e preencha os seus dados."
+        )
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError as e:
+        sys.exit(
+            f"Erro de JSON em {caminho}, linha {e.lineno}, coluna {e.colno}: {e.msg}\n"
+            "Confira vírgulas e aspas; em caminhos do Windows use barras duplas (C:\\\\Pasta\\\\programa.exe)."
+        )
+
+
+CONFIG = carregar_config(BASE / "config_agente.json")
 
 TOKEN = CONFIG["token"]
 PORTA = int(CONFIG.get("porta", 8765))
