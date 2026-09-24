@@ -225,8 +225,33 @@ class TestAgenteConfig(unittest.TestCase):
                 self.assertIn(mensagem, saida.stderr)
                 self.assertNotIn("Traceback", saida.stderr)
 
+    def test_valores_com_tipo_errado_encerram_com_mensagem(self):
+        base = {"token": TOKEN, "porta": 0, "programas": {"calculadora": ["calc.exe"]}}
+        casos = [
+            ({"programas": []}, '"programas" precisa ser um objeto entre chaves'),
+            ({"programas": None}, '"programas" precisa ser um objeto entre chaves'),
+            ({"programas": {}}, "Cadastre pelo menos um programa"),
+            ({"programas": {"calculadora": "calc.exe"}}, 'o comando de "calculadora" precisa ser uma lista de textos'),
+            ({"programas": {"calculadora": []}}, 'o comando de "calculadora" precisa ser uma lista de textos'),
+            ({"programas": {"calculadora": ["calc.exe", 1]}}, 'o comando de "calculadora" precisa ser uma lista'),
+            ({"porta": ""}, '"porta" precisa ser um número entre 0 e 65535'),
+            ({"porta": None}, '"porta" precisa ser um número entre 0 e 65535'),
+            ({"porta": 70000}, '"porta" precisa ser um número entre 0 e 65535'),
+        ]
+        for mudanca, mensagem in casos:
+            with self.subTest(mudanca=mudanca):
+                self.gravar_config(json.dumps({**base, **mudanca}))
+                saida = rodar_agente(self.pasta)
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn(mensagem, saida.stderr)
+                self.assertNotIn("Traceback", saida.stderr)
+
+    def test_porta_como_texto_numerico_e_aceita(self):
+        self.gravar_config(json.dumps({"token": TOKEN, "porta": "8765", "programas": {"calculadora": ["calc.exe"]}}))
+        self.assertEqual(importar_copia(self.pasta, "agente").PORTA, 8765)
+
     def test_aceita_bom_do_bloco_de_notas(self):
-        config = {"token": TOKEN, "porta": 0, "programas": {}}
+        config = {"token": TOKEN, "porta": 0, "programas": {"calculadora": ["calc.exe"]}}
         (self.pasta / "config_agente.json").write_text(json.dumps(config), encoding="utf-8-sig")
         self.assertEqual(importar_copia(self.pasta, "agente").TOKEN, TOKEN)
 

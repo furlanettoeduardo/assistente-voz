@@ -342,6 +342,26 @@ class TestServidorConfig(unittest.TestCase):
         self.assertIn("llm_base_url, llm_api_key, llm_model, pc_url, pc_token", saida.stderr)
         self.assertNotIn("Traceback", saida.stderr)
 
+    def test_valores_com_tipo_ou_formato_errado_encerram_com_mensagem(self):
+        base = {"groq_api_key": CHAVE_FALSA, "stt_model": "whisper-falso", "llm_base_url": "http://127.0.0.1:9",
+                "llm_api_key": CHAVE_FALSA, "llm_model": "qwen-falso", "pc_url": "http://127.0.0.1:9",
+                "pc_token": TOKEN, "porta": 0}  # porta 0: uma regressão não disputa a 8000
+        casos = [
+            ({"pc_url": None}, '"pc_url" precisa ser um texto entre aspas'),
+            ({"llm_base_url": 8}, '"llm_base_url" precisa ser um texto entre aspas'),
+            ({"pc_token": 123}, '"pc_token" precisa ser um texto entre aspas'),
+            ({"pc_url": "192.168.0.10:8765"}, '"pc_url" precisa começar com http:// ou https://'),
+            ({"porta": ""}, '"porta" precisa ser um número entre 0 e 65535'),
+            ({"porta": 70000}, '"porta" precisa ser um número entre 0 e 65535'),
+            ({"host": 127}, '"host" precisa ser um texto'),
+        ]
+        for mudanca, mensagem in casos:
+            with self.subTest(mudanca=mudanca):
+                saida = self.rodar_servidor({**base, **mudanca})
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn(mensagem, saida.stderr)
+                self.assertNotIn("Traceback", saida.stderr)
+
     def test_config_invalido_encerra_com_mensagem(self):
         com_acento = {"groq_api_key": "chave-música"}
         casos = [

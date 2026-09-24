@@ -14,10 +14,15 @@ import requests
 from flask import Flask, jsonify, request, send_from_directory
 
 BASE = Path(__file__).parent
+ARQUIVO_CONFIG = BASE / "config_servidor.json"
+TIPOS = {str: "um texto entre aspas", dict: "um objeto entre chaves { }"}
 
 
-def carregar_config(caminho: Path, obrigatorias: tuple[str, ...]) -> dict:
-    """Lê o JSON de configuração ou encerra explicando o que fazer."""
+def carregar_config(caminho: Path, obrigatorias: dict) -> dict:
+    """
+    Lê o JSON de configuração ou encerra explicando o que fazer. `obrigatorias` diz o tipo
+    de cada chave que precisa existir (None aceita qualquer tipo).
+    """
     exemplo = caminho.with_name(f"{caminho.stem}.example.json")
     try:
         texto = caminho.read_text(encoding="utf-8-sig")  # -sig aceita o BOM do Bloco de Notas
@@ -40,11 +45,33 @@ def carregar_config(caminho: Path, obrigatorias: tuple[str, ...]) -> dict:
     faltando = [chave for chave in obrigatorias if chave not in config]
     if faltando:
         sys.exit(f"Faltam chaves em {caminho}: {', '.join(faltando)}. Compare com {exemplo.name}.")
+    for chave, tipo in obrigatorias.items():
+        if tipo is not None and not isinstance(config[chave], tipo):
+            sys.exit(f'Em {caminho}, "{chave}" precisa ser {TIPOS[tipo]}. Compare com {exemplo.name}.')
     return config
 
 
-CFG = carregar_config(BASE / "config_servidor.json", (
-    "groq_api_key", "stt_model", "llm_base_url", "llm_api_key", "llm_model", "pc_url", "pc_token"))
+def ler_porta(config: dict, caminho: Path, padrao: int) -> int:
+    """A porta pode vir como número ou texto ("8000"), mas precisa estar entre 0 e 65535."""
+    try:
+        porta = int(config.get("porta", padrao))
+    except (TypeError, ValueError):
+        porta = -1
+    if not 0 <= porta <= 65535:
+        sys.exit(f'Em {caminho}, "porta" precisa ser um número entre 0 e 65535, como {padrao}.')
+    return porta
+
+
+CFG = carregar_config(ARQUIVO_CONFIG, dict.fromkeys((
+    "groq_api_key", "stt_model", "llm_base_url", "llm_api_key", "llm_model", "pc_url", "pc_token"), str))
+for _chave in ("pc_url", "llm_base_url"):
+    if not CFG[_chave].startswith(("http://", "https://")):
+        sys.exit(f'Em {ARQUIVO_CONFIG}, "{_chave}" precisa começar com http:// ou https://, '
+                 "como em config_servidor.example.json.")
+HOST = CFG.get("host", "127.0.0.1")
+if not isinstance(HOST, str) or not HOST:
+    sys.exit(f'Em {ARQUIVO_CONFIG}, "host" precisa ser um texto, como "127.0.0.1".')
+PORTA = ler_porta(CFG, ARQUIVO_CONFIG, 8000)
 
 GROQ_URL = "https://api.groq.com/openai/v1"
 PC_URL = CFG["pc_url"].rstrip("/")
@@ -220,4 +247,4 @@ def texto():
 
 
 if __name__ == "__main__":
-    app.run(host=CFG.get("host", "127.0.0.1"), port=int(CFG.get("porta", 8000)))
+    app.run(host=HOST, port=PORTA)

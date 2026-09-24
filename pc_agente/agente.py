@@ -15,10 +15,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BASE = Path(__file__).parent
+ARQUIVO_CONFIG = BASE / "config_agente.json"
+TIPOS = {str: "um texto entre aspas", dict: "um objeto entre chaves { }"}
 
 
-def carregar_config(caminho: Path, obrigatorias: tuple[str, ...]) -> dict:
-    """Lê o JSON de configuração ou encerra explicando o que fazer."""
+def carregar_config(caminho: Path, obrigatorias: dict) -> dict:
+    """
+    Lê o JSON de configuração ou encerra explicando o que fazer. `obrigatorias` diz o tipo
+    de cada chave que precisa existir (None aceita qualquer tipo).
+    """
     exemplo = caminho.with_name(f"{caminho.stem}.example.json")
     try:
         texto = caminho.read_text(encoding="utf-8-sig")  # -sig aceita o BOM do Bloco de Notas
@@ -41,7 +46,21 @@ def carregar_config(caminho: Path, obrigatorias: tuple[str, ...]) -> dict:
     faltando = [chave for chave in obrigatorias if chave not in config]
     if faltando:
         sys.exit(f"Faltam chaves em {caminho}: {', '.join(faltando)}. Compare com {exemplo.name}.")
+    for chave, tipo in obrigatorias.items():
+        if tipo is not None and not isinstance(config[chave], tipo):
+            sys.exit(f'Em {caminho}, "{chave}" precisa ser {TIPOS[tipo]}. Compare com {exemplo.name}.')
     return config
+
+
+def ler_porta(config: dict, caminho: Path, padrao: int) -> int:
+    """A porta pode vir como número ou texto ("8765"), mas precisa estar entre 0 e 65535."""
+    try:
+        porta = int(config.get("porta", padrao))
+    except (TypeError, ValueError):
+        porta = -1
+    if not 0 <= porta <= 65535:
+        sys.exit(f'Em {caminho}, "porta" precisa ser um número entre 0 e 65535, como {padrao}.')
+    return porta
 
 
 def normalizar(nome) -> str:
@@ -49,12 +68,18 @@ def normalizar(nome) -> str:
     return " ".join(str(nome).split()).lower()
 
 
-CONFIG = carregar_config(BASE / "config_agente.json", ("token", "programas"))
+CONFIG = carregar_config(ARQUIVO_CONFIG, {"token": None, "programas": dict})
 
 TOKEN = str(CONFIG["token"] or "").strip()
-PORTA = int(CONFIG.get("porta", 8765))
+PORTA = ler_porta(CONFIG, ARQUIVO_CONFIG, 8765)
 PROGRAMAS = {normalizar(nome): comando  # nome -> comando (lista de strings)
              for nome, comando in CONFIG["programas"].items()}
+
+if not PROGRAMAS:
+    sys.exit(f'Cadastre pelo menos um programa em "programas" no {ARQUIVO_CONFIG}, como no exemplo.')
+for nome, comando in PROGRAMAS.items():
+    if not isinstance(comando, list) or not comando or not all(isinstance(parte, str) for parte in comando):
+        sys.exit(f'Em {ARQUIVO_CONFIG}, o comando de "{nome}" precisa ser uma lista de textos, como ["notepad.exe"].')
 
 # Token vazio deixaria qualquer um na rede abrir programas; com acento, o celular não consegue enviá-lo.
 if not TOKEN or TOKEN == "TROQUE-ESTE-TOKEN" or not TOKEN.isascii():
