@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Assistente</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --fundo: #EEF1F8; --texto: #1B2140; --suave: #5A6283;
+    --lampada: #E9A62E; --brilho: rgba(233,166,46,.45); --erro: #B3261E; --linha: #CDD3E6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fundo: #161B35; --texto: #E8EBF7; --suave: #9AA2C4;
+            --lampada: #F2B84B; --brilho: rgba(242,184,75,.35); --erro: #FF8A80; --linha: #2C3358; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--fundo); color: var(--texto);
+    font: 18px/1.5 "Atkinson Hyperlegible", system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    padding: calc(env(safe-area-inset-top, 0px) + 24px) 20px calc(env(safe-area-inset-bottom, 0px) + 20px);
+  }
+  main { width: 100%; max-width: 30rem; flex: 1; display: flex; flex-direction: column; }
+  #status { text-align: center; color: var(--suave); min-height: 1.5em; margin: 0 0 8px; }
+  #status.erro { color: var(--erro); }
+  .palco { flex: 1; display: grid; place-items: center; min-height: 260px; }
+  #falar {
+    width: 11rem; height: 11rem; border-radius: 50%; border: none; cursor: pointer;
+    background: var(--lampada); color: #1B2140; font: 700 1.15rem/1.2 inherit;
+    box-shadow: 0 0 0 0 var(--brilho); transition: box-shadow .25s, transform .15s;
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  }
+  #falar.ouvindo { box-shadow: 0 0 0 28px var(--brilho), 0 0 70px 30px var(--brilho); transform: scale(1.04); }
+  #falar.pensando { opacity: .6; }
+  #falar:focus-visible { outline: 3px solid var(--texto); outline-offset: 6px; }
+  form { display: flex; gap: 8px; margin: 12px 0 20px; }
+  input {
+    flex: 1; min-width: 0; font: inherit; color: inherit; background: transparent;
+    border: 1px solid var(--linha); border-radius: 10px; padding: 10px 12px;
+  }
+  form button {
+    font: inherit; border: 1px solid var(--linha); background: transparent; color: inherit;
+    border-radius: 10px; padding: 10px 16px; cursor: pointer;
+  }
+  ol { list-style: none; padding: 0; margin: 0; }
+  li { border-top: 1px solid var(--linha); padding: 12px 0; }
+  .voce { color: var(--suave); margin: 0; }
+  .ela { margin: 2px 0 0; }
+  .acao { font-size: .85rem; color: var(--suave); margin: 4px 0 0; }
+  @media (prefers-reduced-motion: reduce) { #falar { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <p id="status">Segure o botão e fale</p>
+  <div class="palco"><button id="falar" type="button">Segure para falar</button></div>
+  <form id="formTexto">
+    <input id="campo" placeholder="Ou digite um comando" autocomplete="off">
+    <button type="submit">Enviar</button>
+  </form>
+  <ol id="historico"></ol>
+</main>
+
+<script>
+const botao = document.getElementById("falar");
+const status = document.getElementById("status");
+const historico = document.getElementById("historico");
+let gravador = null, pedacos = [], inicio = 0, segurando = false;
+
+const TIPOS = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+const tipo = window.MediaRecorder ? TIPOS.find(t => MediaRecorder.isTypeSupported(t)) || "" : "";
+
+function mostrar(texto, erro = false) {
+  status.textContent = texto;
+  status.classList.toggle("erro", erro);
+}
+
+function falar(texto) {
+  if (!("speechSynthesis" in window) || !texto) return;
+  speechSynthesis.cancel();
+  const fala = new SpeechSynthesisUtterance(texto);
+  fala.lang = "pt-BR";
+  const voz = speechSynthesis.getVoices().find(v => v.lang.replace("_", "-").startsWith("pt-BR"));
+  if (voz) fala.voice = voz;
+  speechSynthesis.speak(fala);
+}
+
+function registrar({ transcricao, resposta, acoes }) {
+  const item = document.createElement("li");
+  const linha = (classe, texto) => {
+    const p = document.createElement("p"); p.className = classe; p.textContent = texto; item.append(p);
+  };
+  linha("voce", transcricao);
+  linha("ela", resposta);
+  (acoes || []).forEach(a => {
+    const ok = a.resultado && a.resultado.ok;
+    linha("acao", `${ok ? "Abriu" : "Não abriu"}: ${a.argumentos.nome || "?"}${ok ? "" : " (" + (a.resultado.erro || "erro") + ")"}`);
+  });
+  historico.prepend(item);
+}
+
+async function enviar(url, opcoes) {
+  botao.classList.add("pensando");
+  mostrar("Pensando…");
+  try {
+    const r = await fetch(url, opcoes);
+    const dados = await r.json();
+    if (!r.ok) throw new Error(dados.erro || `Erro ${r.status}`);
+    registrar(dados);
+    mostrar("Segure o botão e fale");
+    falar(dados.resposta);
+  } catch (e) {
+    mostrar(e.message, true);
+  } finally {
+    botao.classList.remove("pensando");
+  }
+}
+
+async function comecar(ev) {
+  ev.preventDefault();
+  if (gravador || segurando) return;
+  segurando = true;
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    segurando = false;
+    return mostrar("Este navegador não grava áudio aqui. Abra pelo endereço localhost.", true);
+  }
+  try {
+    const fluxo = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!segurando) { fluxo.getTracks().forEach(t => t.stop()); return; } // soltou antes de liberar o mic
+    gravador = new MediaRecorder(fluxo, tipo ? { mimeType: tipo } : undefined);
+    pedacos = [];
+    gravador.ondataavailable = e => e.data.size && pedacos.push(e.data);
+    gravador.onstop = () => {
+      fluxo.getTracks().forEach(t => t.stop());
+      const duracao = Date.now() - inicio;
+      const mime = gravador.mimeType || tipo || "audio/webm";
+      gravador = null;
+      if (duracao < 400) return mostrar("Segure o botão enquanto fala.", true);
+      const audio = new Blob(pedacos, { type: mime });
+      enviar("/voz", { method: "POST", headers: { "Content-Type": mime }, body: audio });
+    };
+    inicio = Date.now();
+    gravador.start();
+    botao.classList.add("ouvindo");
+    mostrar("Ouvindo…");
+  } catch (e) {
+    segurando = false;
+    mostrar("Sem acesso ao microfone. Permita o uso nas configurações do navegador.", true);
+  }
+}
+
+function parar() {
+  segurando = false;
+  botao.classList.remove("ouvindo");
+  if (gravador && gravador.state === "recording") gravador.stop();
+}
+
+botao.addEventListener("pointerdown", e => { botao.setPointerCapture(e.pointerId); comecar(e); });
+botao.addEventListener("pointerup", parar);
+botao.addEventListener("pointercancel", parar);
+botao.addEventListener("contextmenu", e => e.preventDefault());
+botao.addEventListener("keydown", e => { if (e.code === "Space" && !e.repeat) comecar(e); });
+botao.addEventListener("keyup", e => { if (e.code === "Space") parar(); });
+
+document.getElementById("formTexto").addEventListener("submit", e => {
+  e.preventDefault();
+  const campo = document.getElementById("campo");
+  const texto = campo.value.trim();
+  if (!texto) return;
+  campo.value = "";
+  enviar("/texto", { method: "POST", headers: { "Content-Type": "application/json" },
+                     body: JSON.stringify({ texto }) });
+});
+
+if ("speechSynthesis" in window) speechSynthesis.getVoices(); // pré-carrega as vozes
+</script>
+</body>
+</html>

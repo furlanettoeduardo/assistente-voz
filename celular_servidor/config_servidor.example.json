@@ -1,0 +1,14 @@
+{
+  "groq_api_key": "SUA-CHAVE-DO-GROQ",
+  "stt_model": "whisper-large-v3-turbo",
+
+  "llm_base_url": "https://api.groq.com/openai/v1",
+  "llm_api_key": "SUA-CHAVE-DO-GROQ",
+  "llm_model": "NOME-DO-MODELO-QWEN-NO-GROQ",
+
+  "pc_url": "http://192.168.0.10:8765",
+  "pc_token": "O-MESMO-TOKEN-DO-AGENTE",
+
+  "host": "127.0.0.1",
+  "porta": 8000
+}
