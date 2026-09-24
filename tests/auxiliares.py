@@ -2,6 +2,7 @@
 Peças compartilhadas pelos testes. Nada aqui chama APIs reais: o LLM é um servidor HTTP falso
 em 127.0.0.1 e o agente roda numa porta livre escolhida pelo sistema.
 """
+import fnmatch
 import importlib.util
 import itertools
 import json
@@ -22,10 +23,17 @@ POPEN_REAL = subprocess.Popen  # guardado antes de qualquer mock.patch
 _contador = itertools.count()
 
 
+def _fora_da_copia(pasta: str, nomes: list[str]) -> list[str]:
+    """Caches e configs reais, inclusive cópias como "config_agente (1).json" (os mesmos do .gitignore)."""
+    exemplos = {"config_agente.example.json", "config_servidor.example.json"}
+    return [nome for nome in nomes if nome == "__pycache__" or (
+        nome not in exemplos and (fnmatch.fnmatch(nome, "config_agente*.json*")
+                                  or fnmatch.fnmatch(nome, "config_servidor*.json*")))]
+
+
 def copiar_componente(pasta: Path, destino: Path) -> Path:
     """Copia a pasta do componente sem os configs reais do usuário nem caches."""
-    shutil.copytree(pasta, destino, ignore=shutil.ignore_patterns(
-        "config_agente.json", "config_servidor.json", "__pycache__"))
+    shutil.copytree(pasta, destino, ignore=_fora_da_copia)
     return destino
 
 
