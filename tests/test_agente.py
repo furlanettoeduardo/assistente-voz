@@ -193,12 +193,23 @@ class TestAgenteConfig(unittest.TestCase):
         self.assertIn("Copie config_agente.example.json", saida.stderr)
         self.assertNotIn("Traceback", saida.stderr)
 
-    def test_json_quebrado_encerra_com_linha_e_coluna(self):
-        self.gravar_config('{"token": "C:\\Pasta"}')
-        saida = rodar_agente(self.pasta)
-        self.assertEqual(saida.returncode, 1)
-        self.assertIn("linha 1, coluna", saida.stderr)
-        self.assertNotIn("Traceback", saida.stderr)
+    def test_json_quebrado_encerra_com_linha_coluna_e_motivo_em_portugues(self):
+        casos = [
+            ('{"token": "C:\\Pasta"}', "barra invertida simples dentro de um texto"),
+            ('{"token": "abc" "porta": 1}', "falta uma vírgula entre dois itens"),
+            ('{"token": "abc",}', "vírgula sobrando antes do }"),  # a mensagem do json mudou no 3.13
+            ('{"token": "abc', "aspas abertas que não foram fechadas"),
+            ('{"token": "abc"} sobra', "tem texto sobrando depois do último }"),
+        ]
+        for conteudo, motivo in casos:
+            with self.subTest(conteudo=conteudo):
+                self.gravar_config(conteudo)
+                saida = rodar_agente(self.pasta)
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn("linha 1, coluna", saida.stderr)
+                self.assertIn(motivo, saida.stderr)
+                self.assertNotIn("Expecting", saida.stderr)
+                self.assertNotIn("Traceback", saida.stderr)
 
     def test_token_de_exemplo_vazio_ou_com_acento_nao_inicia(self):
         exemplo = json.loads((PASTA_AGENTE / "config_agente.example.json").read_text(encoding="utf-8"))

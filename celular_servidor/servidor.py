@@ -22,6 +22,18 @@ from werkzeug.serving import make_server
 BASE = Path(__file__).parent
 ARQUIVO_CONFIG = BASE / "config_servidor.json"
 TIPOS = {str: "um texto entre aspas", dict: "um objeto entre chaves { }"}
+# Motivos que o módulo json dá em inglês, pelo começo da mensagem (o 3.13 mudou o da vírgula sobrando).
+MOTIVOS_JSON = (
+    ("Expecting ',' delimiter", "falta uma vírgula entre dois itens"),
+    ("Expecting ':' delimiter", "faltam os dois-pontos entre o nome e o valor"),
+    ("Expecting property name", "vírgula sobrando antes do } ou nome sem aspas duplas"),
+    ("Illegal trailing comma", "vírgula sobrando antes do } ou do ]"),
+    ("Expecting value", "falta um valor, ou tem uma vírgula sobrando"),
+    ("Invalid \\escape", "barra invertida simples dentro de um texto"),
+    ("Unterminated string", "aspas abertas que não foram fechadas"),
+    ("Invalid control character", "quebra de linha ou tabulação dentro de um texto entre aspas"),
+    ("Extra data", "tem texto sobrando depois do último }"),
+)
 
 
 def carregar_config(caminho: Path, obrigatorias: dict) -> dict:
@@ -42,8 +54,10 @@ def carregar_config(caminho: Path, obrigatorias: dict) -> dict:
     try:
         config = json.loads(texto)
     except json.JSONDecodeError as e:
+        motivo = next((pt for en, pt in MOTIVOS_JSON if e.msg.startswith(en)),
+                      f"formato inválido (detalhe técnico: {e.msg})")
         sys.exit(
-            f"Erro de JSON em {caminho}, linha {e.lineno}, coluna {e.colno}: {e.msg}\n"
+            f"Erro de JSON em {caminho}, linha {e.lineno}, coluna {e.colno}: {motivo}.\n"
             "Confira vírgulas e aspas nos valores."
         )
     if not isinstance(config, dict):
