@@ -125,7 +125,13 @@ def programas_disponiveis() -> list[str]:
         r = requests.get(f"{PC_URL}/programas", headers=PC_HEADERS, timeout=3)
         r.raise_for_status()
         return r.json()["programas"]
-    except requests.RequestException:
+    except requests.RequestException as e:
+        if getattr(e.response, "status_code", None) == 401:
+            print("[servidor] o agente do PC recusou o pc_token: ele precisa ser igual ao token do agente.",
+                  file=sys.stderr)
+        else:
+            print(f"[servidor] não consegui falar com o agente do PC em {PC_URL} (detalhe técnico: {e})",
+                  file=sys.stderr)
         return []
 
 
@@ -166,7 +172,9 @@ def executar_ferramenta(nome: str, args: dict) -> dict:
                               json={"programa": args.get("nome", "")}, timeout=5)
             return r.json()
         except requests.RequestException as e:
-            return {"erro": f"não consegui falar com o computador: {e}"}
+            print(f"[servidor] não consegui falar com o agente do PC em {PC_URL} (detalhe técnico: {e})",
+                  file=sys.stderr)
+            return {"erro": "não consegui falar com o computador"}
     return {"erro": f"ferramenta desconhecida: {nome}"}
 
 
@@ -225,6 +233,50 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
                               "content": json.dumps(executadas[chave], ensure_ascii=False)})
 
 
+# ---------- Erros das APIs ----------
+
+def explicar_erro(e: requests.RequestException, servico: str) -> str:
+    """
+    Traduz a falha de uma API externa numa frase em português para a página. O detalhe técnico
+    (em inglês, do jeito que a API mandou) fica só no terminal.
+    """
+    servico_maiusculo = servico[0].upper() + servico[1:]
+    resposta = e.response
+    if resposta is None:
+        print(f"[servidor] falha ao falar com {servico} (detalhe técnico: {e})", file=sys.stderr)
+        if isinstance(e, requests.exceptions.JSONDecodeError):
+            return f"{servico_maiusculo} mandou uma resposta que o servidor não entendeu. Tente de novo."
+        if isinstance(e, requests.Timeout) and not isinstance(e, requests.ConnectionError):
+            return f"{servico_maiusculo} demorou demais para responder. Tente de novo."
+        return f"Sem conexão com {servico}. Confira a internet do celular e tente de novo."
+
+    status, corpo = resposta.status_code, resposta.text[:500]
+    print(f"[servidor] {servico} respondeu {status} (detalhe técnico: {corpo})", file=sys.stderr)
+    if status == 401:
+        return f"{servico_maiusculo} recusou a chave. Confira a chave no config_servidor.json."
+    if status == 404:
+        return f"{servico_maiusculo} não encontrou o modelo ou o endereço. Confira o modelo e a URL no config."
+    if status == 413:
+        return f"{servico_maiusculo} achou o pedido grande demais. Tente um comando mais curto."
+    if status == 429:
+        return f"{servico_maiusculo} avisou que o limite de uso acabou por enquanto. Espere um pouco e tente de novo."
+    if "decommissioned" in corpo:
+        return f"{servico_maiusculo} avisou que o modelo configurado saiu do ar. Escolha outro na lista de modelos."
+    if "tool_use_failed" in corpo:
+        return "O modelo se confundiu ao usar a ferramenta. Tente de novo."
+    if status >= 500:
+        return f"{servico_maiusculo} está com problemas agora. Tente de novo em instantes."
+    return f"{servico_maiusculo} recusou o pedido (erro {status}). Veja os detalhes no terminal do servidor."
+
+
+def responder(frase: str):
+    try:
+        resposta, acoes = conversar(frase)
+    except requests.RequestException as e:
+        return jsonify(erro=explicar_erro(e, "a API do LLM")), 502
+    return jsonify(transcricao=frase, resposta=resposta, acoes=acoes)
+
+
 # ---------- Rotas ----------
 
 MENSAGENS_HTTP = {
@@ -259,14 +311,11 @@ def voz():
         return jsonify(erro="Áudio curto demais. Segure o botão enquanto fala."), 400
     try:
         texto = transcrever(audio, request.content_type)
-        if not texto:
-            return jsonify(erro="Não entendi nada no áudio. Tente de novo."), 400
-        resposta, acoes = conversar(texto)
-    except requests.HTTPError as e:
-        return jsonify(erro=f"Erro na API: {e.response.status_code} {e.response.text[:200]}"), 502
     except requests.RequestException as e:
-        return jsonify(erro=f"Sem conexão com a API: {e}"), 502
-    return jsonify(transcricao=texto, resposta=resposta, acoes=acoes)
+        return jsonify(erro=explicar_erro(e, "a API de transcrição")), 502
+    if not texto:
+        return jsonify(erro="Não entendi nada no áudio. Tente de novo."), 400
+    return responder(texto)
 
 
 @app.post("/texto")
@@ -276,13 +325,7 @@ def texto():
     frase = frase.strip() if isinstance(frase, str) else ""
     if not frase:
         return jsonify(erro="Digite um comando."), 400
-    try:
-        resposta, acoes = conversar(frase)
-    except requests.HTTPError as e:
-        return jsonify(erro=f"Erro na API: {e.response.status_code} {e.response.text[:200]}"), 502
-    except requests.RequestException as e:
-        return jsonify(erro=f"Sem conexão com a API: {e}"), 502
-    return jsonify(transcricao=frase, resposta=resposta, acoes=acoes)
+    return responder(frase)
 
 
 if __name__ == "__main__":

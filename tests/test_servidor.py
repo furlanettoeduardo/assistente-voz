@@ -117,6 +117,7 @@ class TestServidor(unittest.TestCase):
         pilha = contextlib.ExitStack()
         self.addCleanup(pilha.close)
         pilha.enter_context(contextlib.redirect_stdout(io.StringIO()))  # "[agente] abriu: ..."
+        self.terminal = pilha.enter_context(contextlib.redirect_stderr(io.StringIO()))  # avisos do servidor
 
     def enviar_texto(self, texto: str):
         return self.cliente.post("/texto", json={"texto": texto})
@@ -199,6 +200,7 @@ class TestServidor(unittest.TestCase):
         primeiro = self.llm.pedidos_de_chat()[0]["json"]
         self.assertNotIn("tools", primeiro)
         self.assertIn("inacessível", primeiro["messages"][0]["content"])
+        self.assertIn("o agente do PC recusou o pc_token", self.terminal.getvalue())
 
     def test_pc_desligado_responde_sem_ferramentas(self):
         self.llm.programar(resposta_texto("O computador está desligado agora."))
@@ -208,6 +210,18 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["acoes"], [])
         self.assertNotIn("tools", self.llm.pedidos_de_chat()[0]["json"])
+        self.assertIn("não consegui falar com o agente do PC", self.terminal.getvalue())
+
+    def test_pc_cai_no_meio_do_comando(self):
+        # O LLM pede a ferramenta mesmo sem recebê-la; o erro para a página não traz detalhe em inglês.
+        self.llm.programar(resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA}),
+                           resposta_texto("Não consegui falar com o computador."))
+        with mock.patch.object(self.servidor, "PC_URL", "http://127.0.0.1:9"):
+            r = self.enviar_texto("abre o programa de teste")
+
+        acao, = r.get_json()["acoes"]
+        self.assertEqual(acao["resultado"], {"erro": "não consegui falar com o computador"})
+        self.assertIn("detalhe técnico", self.terminal.getvalue())
 
     def test_ultima_rodada_so_aceita_texto_e_nao_repete_o_programa(self):
         # O LLM falso insiste na mesma chamada nas 3 rodadas, como um backend que ignora tool_choice.
@@ -263,12 +277,33 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(r.get_json()["acoes"][0]["resultado"], {"ok": True, "programa": PROGRAMA})
         self.assertTrue(esperar_arquivo(self.marcador), "o programa de teste não chegou a rodar")
 
-    def test_erro_da_api_do_llm_vira_502(self):
-        self.llm.programar({"error": {"message": "model not found"}}, status=404)
-        r = self.enviar_texto("abre o programa de teste")
+    def test_erros_da_api_do_llm_viram_mensagens_em_portugues(self):
+        casos = [
+            (401, "Invalid API Key", "A API do LLM recusou a chave. Confira a chave no config_servidor.json."),
+            (404, "The model `x` does not exist",
+             "A API do LLM não encontrou o modelo ou o endereço. Confira o modelo e a URL no config."),
+            (429, "Rate limit reached",
+             "A API do LLM avisou que o limite de uso acabou por enquanto. Espere um pouco e tente de novo."),
+            (413, "Request too large for model", "A API do LLM achou o pedido grande demais. Tente um comando mais curto."),
+            (400, "The model `x` has been decommissioned",
+             "A API do LLM avisou que o modelo configurado saiu do ar. Escolha outro na lista de modelos."),
+            (400, "Failed to call a function (tool_use_failed)", "O modelo se confundiu ao usar a ferramenta. Tente de novo."),
+            (503, "Service Unavailable", "A API do LLM está com problemas agora. Tente de novo em instantes."),
+            (422, "Unprocessable", "A API do LLM recusou o pedido (erro 422). Veja os detalhes no terminal do servidor."),
+        ]
+        for status, detalhe, mensagem in casos:
+            with self.subTest(status=status, detalhe=detalhe):
+                self.llm.programar({"error": {"message": detalhe}}, status=status)
+                r = self.enviar_texto("abre o programa de teste")
 
-        self.assertEqual(r.status_code, 502)
-        self.assertIn("Erro na API: 404", r.get_json()["erro"])
+                self.assertEqual((r.status_code, r.get_json()), (502, {"erro": mensagem}))
+                self.assertIn(detalhe, self.terminal.getvalue())  # o detalhe original fica no terminal
+
+    def test_sem_conexao_com_o_llm(self):
+        with mock.patch.object(self.servidor, "LLM_URL", "http://127.0.0.1:9"):
+            r = self.enviar_texto("abre o programa de teste")
+        self.assertEqual((r.status_code, r.get_json()),
+                         (502, {"erro": "Sem conexão com a API do LLM. Confira a internet do celular e tente de novo."}))
 
     def test_voz_transcreve_e_executa(self):
         self.llm.transcricao = " abre o programa de teste "
@@ -295,9 +330,21 @@ class TestServidor(unittest.TestCase):
         self.llm.status_transcricao = 401
         r = self.enviar_audio()
 
-        self.assertEqual(r.status_code, 502)
-        self.assertIn("Erro na API: 401", r.get_json()["erro"])
+        self.assertEqual((r.status_code, r.get_json()),
+                         (502, {"erro": "A API de transcrição recusou a chave. Confira a chave no config_servidor.json."}))
         self.assertEqual(self.llm.pedidos_de_chat(), [])
+
+    def test_timeout_e_resposta_ilegivel_da_api(self):
+        casos = [
+            (requests.ReadTimeout("read timed out"), "A API do LLM demorou demais para responder. Tente de novo."),
+            (requests.ConnectTimeout("connect timed out"),
+             "Sem conexão com a API do LLM. Confira a internet do celular e tente de novo."),
+            (requests.exceptions.JSONDecodeError("Expecting value", "<html>", 0),
+             "A API do LLM mandou uma resposta que o servidor não entendeu. Tente de novo."),
+        ]
+        for erro, mensagem in casos:
+            with self.subTest(erro=type(erro).__name__):
+                self.assertEqual(self.servidor.explicar_erro(erro, "a API do LLM"), mensagem)
 
     def test_transcricao_vazia(self):
         self.llm.transcricao = "   "
