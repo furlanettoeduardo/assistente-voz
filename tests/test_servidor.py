@@ -211,16 +211,28 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(len(self.llm.pedidos_de_chat()), 3)
 
     def test_argumentos_invalidos_do_llm_nao_quebram(self):
-        resposta = resposta_ferramenta("chamada-1", "abrir_programa", {})
-        resposta["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = "{nome: chrome"
-        self.llm.programar(resposta, resposta_texto("Não entendi qual programa."))
-        r = self.enviar_texto("abre")
+        for argumentos in ("{nome: chrome", "null", f'"{PROGRAMA}"', f'["{PROGRAMA}"]', "", None):
+            with self.subTest(argumentos=argumentos):
+                resposta = resposta_ferramenta("chamada-1", "abrir_programa", {})
+                resposta["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = argumentos
+                self.llm.programar(resposta, resposta_texto("Não entendi qual programa."))
+                r = self.enviar_texto("abre")
 
-        self.assertEqual(r.status_code, 200)
-        acao, = r.get_json()["acoes"]
-        self.assertEqual(acao["argumentos"], {})
-        self.assertIn("não está na lista", acao["resultado"]["erro"])
+                self.assertEqual(r.status_code, 200)
+                acao, = r.get_json()["acoes"]
+                self.assertEqual(acao["argumentos"], {})
+                self.assertIn("não está na lista", acao["resultado"]["erro"])
         self.popen.assert_not_called()
+
+    def test_argumentos_ja_como_objeto(self):
+        # A API compatível com OpenAI manda texto JSON, mas alguns backends mandam o objeto pronto.
+        resposta = resposta_ferramenta("chamada-1", "abrir_programa", {})
+        resposta["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = {"nome": PROGRAMA}
+        self.llm.programar(resposta, resposta_texto("Abri."))
+        r = self.enviar_texto("abre o programa de teste")
+
+        self.assertEqual(r.get_json()["acoes"][0]["resultado"], {"ok": True, "programa": PROGRAMA})
+        self.assertTrue(esperar_arquivo(self.marcador), "o programa de teste não chegou a rodar")
 
     def test_erro_da_api_do_llm_vira_502(self):
         self.llm.programar({"error": {"message": "model not found"}}, status=404)

@@ -111,6 +111,16 @@ def montar_ferramentas(programas: list[str]) -> list[dict]:
     }]
 
 
+def ler_argumentos(bruto) -> dict:
+    """Os argumentos vêm do LLM: aceita objeto ou texto JSON de objeto e descarta o resto."""
+    if isinstance(bruto, str):
+        try:
+            bruto = json.loads(bruto or "{}")
+        except json.JSONDecodeError:
+            return {}
+    return bruto if isinstance(bruto, dict) else {}
+
+
 def executar_ferramenta(nome: str, args: dict) -> dict:
     if nome == "abrir_programa":
         try:
@@ -158,10 +168,7 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
                           "tool_calls": chamadas})
         for chamada in chamadas:
             nome = chamada["function"]["name"]
-            try:
-                args = json.loads(chamada["function"].get("arguments") or "{}")
-            except json.JSONDecodeError:
-                args = {}
+            args = ler_argumentos(chamada["function"].get("arguments"))
             resultado = executar_ferramenta(nome, args)
             acoes.append({"ferramenta": nome, "argumentos": args, "resultado": resultado})
             mensagens.append({"role": "tool", "tool_call_id": chamada["id"],
