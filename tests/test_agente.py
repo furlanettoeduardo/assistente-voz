@@ -194,6 +194,22 @@ class TestAgenteConfig(unittest.TestCase):
                 self.assertIn("Defina um token próprio", saida.stderr)
                 self.assertNotIn("Traceback", saida.stderr)
 
+    def test_config_incompleto_ou_em_outra_codificacao_encerra_com_mensagem(self):
+        com_acento = {"token": TOKEN, "programas": {"música": ["x"]}}
+        casos = [
+            (b"[]", "precisa ser um objeto JSON"),
+            (json.dumps({"token": TOKEN}).encode("utf-8"), ": programas. Compare com config_agente.example.json"),
+            (json.dumps(com_acento, ensure_ascii=False).encode("cp1252"), "não está em UTF-8"),  # ANSI
+            (json.dumps(com_acento, ensure_ascii=False).encode("utf-16"), "não está em UTF-8"),
+        ]
+        for conteudo, mensagem in casos:
+            with self.subTest(mensagem=mensagem):
+                (self.pasta / "config_agente.json").write_bytes(conteudo)
+                saida = rodar_agente(self.pasta)
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn(mensagem, saida.stderr)
+                self.assertNotIn("Traceback", saida.stderr)
+
     def test_aceita_bom_do_bloco_de_notas(self):
         config = {"token": TOKEN, "porta": 0, "programas": {}}
         (self.pasta / "config_agente.json").write_text(json.dumps(config), encoding="utf-8-sig")

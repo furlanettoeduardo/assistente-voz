@@ -16,7 +16,7 @@ from flask import Flask, jsonify, request, send_from_directory
 BASE = Path(__file__).parent
 
 
-def carregar_config(caminho: Path) -> dict:
+def carregar_config(caminho: Path, obrigatorias: tuple[str, ...]) -> dict:
     """Lê o JSON de configuração ou encerra explicando o que fazer."""
     exemplo = caminho.with_name(f"{caminho.stem}.example.json")
     try:
@@ -26,16 +26,25 @@ def carregar_config(caminho: Path) -> dict:
             f"Arquivo de configuração não encontrado: {caminho}\n"
             f"Copie {exemplo.name} para {caminho.name}, na mesma pasta, e preencha os seus dados."
         )
+    except UnicodeDecodeError:
+        sys.exit(f"{caminho} não está em UTF-8. Abra no editor e salve com a codificação UTF-8.")
     try:
-        return json.loads(texto)
+        config = json.loads(texto)
     except json.JSONDecodeError as e:
         sys.exit(
             f"Erro de JSON em {caminho}, linha {e.lineno}, coluna {e.colno}: {e.msg}\n"
             "Confira vírgulas e aspas nos valores."
         )
+    if not isinstance(config, dict):
+        sys.exit(f"{caminho} precisa ser um objeto JSON {{...}}, como em {exemplo.name}.")
+    faltando = [chave for chave in obrigatorias if chave not in config]
+    if faltando:
+        sys.exit(f"Faltam chaves em {caminho}: {', '.join(faltando)}. Compare com {exemplo.name}.")
+    return config
 
 
-CFG = carregar_config(BASE / "config_servidor.json")
+CFG = carregar_config(BASE / "config_servidor.json", (
+    "groq_api_key", "stt_model", "llm_base_url", "llm_api_key", "llm_model", "pc_url", "pc_token"))
 
 GROQ_URL = "https://api.groq.com/openai/v1"
 PC_URL = CFG["pc_url"].rstrip("/")

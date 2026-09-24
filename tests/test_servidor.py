@@ -265,16 +265,28 @@ class TestServidor(unittest.TestCase):
 
 @PRECISA_DEPENDENCIAS
 class TestServidorConfig(unittest.TestCase):
-    def test_sem_config_encerra_pedindo_para_copiar_o_exemplo(self):
+    def rodar_servidor(self, config=None) -> subprocess.CompletedProcess:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             pasta = copiar_componente(PASTA_SERVIDOR, Path(tmp) / "servidor")
-            saida = subprocess.run(
+            if config is not None:
+                (pasta / "config_servidor.json").write_text(json.dumps(config), encoding="utf-8")
+            return subprocess.run(
                 [sys.executable, str(pasta / "servidor.py")], cwd=pasta, capture_output=True,
                 text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=60,
             )
+
+    def test_sem_config_encerra_pedindo_para_copiar_o_exemplo(self):
+        saida = self.rodar_servidor()
         self.assertEqual(saida.returncode, 1)
         self.assertIn("config_servidor.json", saida.stderr)
         self.assertIn("Copie config_servidor.example.json", saida.stderr)
+        self.assertNotIn("Traceback", saida.stderr)
+
+    def test_config_sem_chaves_obrigatorias_encerra_listando_as_que_faltam(self):
+        saida = self.rodar_servidor({"groq_api_key": CHAVE_FALSA, "stt_model": "whisper-falso"})
+        self.assertEqual(saida.returncode, 1)
+        self.assertIn("Faltam chaves em", saida.stderr)
+        self.assertIn("llm_base_url, llm_api_key, llm_model, pc_url, pc_token", saida.stderr)
         self.assertNotIn("Traceback", saida.stderr)
 
 

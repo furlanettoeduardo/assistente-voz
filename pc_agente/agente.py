@@ -17,7 +17,7 @@ from pathlib import Path
 BASE = Path(__file__).parent
 
 
-def carregar_config(caminho: Path) -> dict:
+def carregar_config(caminho: Path, obrigatorias: tuple[str, ...]) -> dict:
     """Lê o JSON de configuração ou encerra explicando o que fazer."""
     exemplo = caminho.with_name(f"{caminho.stem}.example.json")
     try:
@@ -27,13 +27,21 @@ def carregar_config(caminho: Path) -> dict:
             f"Arquivo de configuração não encontrado: {caminho}\n"
             f"Copie {exemplo.name} para {caminho.name}, na mesma pasta, e preencha os seus dados."
         )
+    except UnicodeDecodeError:
+        sys.exit(f"{caminho} não está em UTF-8. Abra no editor e salve com a codificação UTF-8.")
     try:
-        return json.loads(texto)
+        config = json.loads(texto)
     except json.JSONDecodeError as e:
         sys.exit(
             f"Erro de JSON em {caminho}, linha {e.lineno}, coluna {e.colno}: {e.msg}\n"
             "Confira vírgulas e aspas; em caminhos do Windows use barras duplas (C:\\\\Pasta\\\\programa.exe)."
         )
+    if not isinstance(config, dict):
+        sys.exit(f"{caminho} precisa ser um objeto JSON {{...}}, como em {exemplo.name}.")
+    faltando = [chave for chave in obrigatorias if chave not in config]
+    if faltando:
+        sys.exit(f"Faltam chaves em {caminho}: {', '.join(faltando)}. Compare com {exemplo.name}.")
+    return config
 
 
 def normalizar(nome) -> str:
@@ -41,7 +49,7 @@ def normalizar(nome) -> str:
     return " ".join(str(nome).split()).lower()
 
 
-CONFIG = carregar_config(BASE / "config_agente.json")
+CONFIG = carregar_config(BASE / "config_agente.json", ("token", "programas"))
 
 TOKEN = str(CONFIG["token"] or "").strip()
 PORTA = int(CONFIG.get("porta", 8765))
