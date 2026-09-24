@@ -230,7 +230,7 @@ class TestServidor(unittest.TestCase):
         r = self.enviar_texto("abre o programa de teste")
 
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.get_json()["resposta"], "Fiz o que consegui, mas algo não saiu como esperado.")
+        self.assertEqual(r.get_json()["resposta"], f"Pronto, abri {PROGRAMA}.")
         acao, = r.get_json()["acoes"]
         self.assertEqual(acao["resultado"], {"ok": True, "programa": PROGRAMA})
         self.popen.assert_called_once()  # abriu uma vez só
@@ -240,6 +240,24 @@ class TestServidor(unittest.TestCase):
         ultimo = self.llm.pedidos_de_chat()[2]["json"]["messages"]
         resultados = [json.loads(m["content"]) for m in ultimo if m["role"] == "tool"]
         self.assertEqual(resultados, [{"ok": True, "programa": PROGRAMA}] * 2)
+
+    def test_groq_recusa_a_ultima_rodada_com_400(self):
+        # Com tool_choice="none", alguns modelos insistem na ferramenta e o Groq responde 400.
+        chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA})
+        falha = {"error": {"message": "Tool choice is none, but model called a tool", "code": "tool_use_failed"}}
+        self.llm.programar_com_status((200, chamada), (200, chamada), (400, falha))
+        r = self.enviar_texto("abre o programa de teste")
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["resposta"], f"Pronto, abri {PROGRAMA}.")
+        self.assertEqual(len(r.get_json()["acoes"]), 1)
+        self.assertIn("tool_use_failed", self.terminal.getvalue())
+
+    def test_nada_aberto_e_sem_texto_final(self):
+        chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": "cmd"})
+        self.llm.programar(chamada, chamada, chamada)
+        r = self.enviar_texto("abre o cmd")
+        self.assertEqual(r.get_json()["resposta"], "Fiz o que consegui, mas algo não saiu como esperado.")
 
     def test_resposta_em_texto_na_ultima_rodada(self):
         self.llm.programar(

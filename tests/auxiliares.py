@@ -156,8 +156,11 @@ class LLMFalso:
             self.status_transcricao = 200
 
     def programar(self, *corpos, status: int = 200) -> None:
+        self.programar_com_status(*[(status, corpo) for corpo in corpos])
+
+    def programar_com_status(self, *respostas: tuple[int, dict]) -> None:
         with self._trava:
-            self.respostas = [(status, corpo) for corpo in corpos]
+            self.respostas = list(respostas)
             self.pedidos = []
 
     def pedidos_de_chat(self) -> list[dict]:

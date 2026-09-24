@@ -189,6 +189,15 @@ def limpar(texto: str) -> str:
     return texto.strip()
 
 
+def resumir(acoes: list[dict]) -> str:
+    """Resposta de reserva quando o modelo não fecha com um texto: conta o que foi feito."""
+    abertos = [a["resultado"]["programa"] for a in acoes
+               if isinstance(a["resultado"], dict) and a["resultado"].get("ok")]
+    if abertos:
+        return f"Pronto, abri {' e '.join(abertos)}."
+    return "Fiz o que consegui, mas algo não saiu como esperado."
+
+
 def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
     programas = programas_disponiveis()
     ferramentas = montar_ferramentas(programas)
@@ -211,14 +220,18 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
 
         r = requests.post(f"{LLM_URL}/chat/completions", headers=LLM_HEADERS,
                           json=payload, timeout=60)
+        if ultima and r.status_code == 400:
+            # Alguns modelos insistem na ferramenta mesmo com tool_choice="none", e o Groq responde 400.
+            print(f"[servidor] o LLM recusou a última rodada (detalhe técnico: {r.text[:500]})", file=sys.stderr)
+            return resumir(acoes), acoes
         r.raise_for_status()
         msg = r.json()["choices"][0]["message"]
         chamadas = msg.get("tool_calls") or []
 
         if not chamadas:
             return limpar(msg.get("content")), acoes
-        if ultima:  # backend que ignora tool_choice="none": não executa nada
-            return limpar(msg.get("content")) or "Fiz o que consegui, mas algo não saiu como esperado.", acoes
+        if ultima:  # backend que ignora tool_choice="none" (o Ollama, por exemplo): não executa nada
+            return limpar(msg.get("content")) or resumir(acoes), acoes
 
         mensagens.append({"role": "assistant", "content": msg.get("content") or "",
                           "tool_calls": chamadas})
