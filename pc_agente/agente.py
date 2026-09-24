@@ -205,9 +205,13 @@ class Servidor(ThreadingHTTPServer):
 
 def explicar_falha_ao_escutar(erro: OSError) -> str:
     # 10013 é o "acesso proibido" do Windows, que aparece nas portas reservadas pelo sistema (Hyper-V, WSL).
-    if isinstance(erro, PermissionError) or erro.errno == getattr(errno, "WSAEACCES", None):
-        dica = ('O sistema não deixou usar essa porta (no Windows, algumas ficam reservadas): troque "porta" '
-                "no config_agente.json e em pc_url, por exemplo para 8766.")
+    proibida = isinstance(erro, PermissionError) or erro.errno == getattr(errno, "WSAEACCES", None)
+    if proibida and PORTA < 1024:
+        dica = ('O sistema só deixa usar portas acima de 1024: troque "porta" no config_agente.json e em pc_url, '
+                "por exemplo para 8765.")
+    elif proibida:
+        dica = ('O sistema não deixou usar essa porta (no Windows, algumas ficam reservadas pelo Hyper-V ou pelo WSL): '
+                'troque "porta" no config_agente.json e em pc_url, por exemplo para 8766.')
     else:
         dica = "Outro agente (ou outro programa) já usa essa porta: feche-o e abra o agente de novo."
     return f"Não consegui escutar na porta {PORTA} (detalhe técnico: {erro}).\n{dica}"

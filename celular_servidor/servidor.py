@@ -405,8 +405,11 @@ def abrir_socket(host: str, porta: int) -> socket.socket:
         elif isinstance(e, socket.gaierror) or e.errno in (errno.EADDRNOTAVAIL,
                                                              getattr(errno, "WSAEADDRNOTAVAIL", None)):
             dica = f'"{host}" não é um endereço deste aparelho: deixe "host" como "127.0.0.1" no config_servidor.json.'
-        elif isinstance(e, PermissionError):
-            dica = 'O sistema não deixou usar essa porta: use uma acima de 1024, como 8000.'
+        elif isinstance(e, PermissionError) and porta < 1024:
+            dica = 'O sistema só deixa usar portas acima de 1024: troque "porta" no config_servidor.json, por exemplo para 8000.'
+        elif isinstance(e, PermissionError):  # no Windows, o 10013 vem das portas reservadas pelo sistema
+            dica = ('O sistema não deixou usar essa porta (no Windows, algumas ficam reservadas pelo Hyper-V ou pelo WSL): '
+                    'troque "porta" no config_servidor.json, por exemplo para 8001.')
         else:
             dica = 'Confira "host" e "porta" no config_servidor.json.'
         sys.exit(f"Não consegui escutar em {host}:{porta} (detalhe técnico: {e}).\n{dica}")

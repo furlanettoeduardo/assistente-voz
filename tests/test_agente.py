@@ -315,7 +315,10 @@ class TestAgenteConfig(unittest.TestCase):
         self.assertIn("Não consegui escutar na porta 8765 (detalhe técnico:", ocupada)
         self.assertIn("Outro agente (ou outro programa) já usa essa porta", ocupada)
         proibida = agente.explicar_falha_ao_escutar(PermissionError(errno.EACCES, "Permission denied"))
-        self.assertIn("O sistema não deixou usar essa porta", proibida)
+        self.assertIn("algumas ficam reservadas pelo Hyper-V ou pelo WSL", proibida)  # 8765: reservada no Windows
+        with mock.patch.object(agente, "PORTA", 80):
+            baixa = agente.explicar_falha_ao_escutar(PermissionError(errno.EACCES, "Permission denied"))
+        self.assertIn("O sistema só deixa usar portas acima de 1024", baixa)
 
     # Os dois abaixo sobem o agente de verdade em 0.0.0.0: no Windows isso abriria o aviso do firewall.
     @unittest.skipIf(sys.platform == "win32", "sobe o agente em 0.0.0.0, o que aciona o firewall do Windows")

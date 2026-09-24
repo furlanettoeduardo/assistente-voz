@@ -3,6 +3,7 @@ Testes do servidor do celular. O LLM e a transcrição são um servidor falso lo
 roda de verdade em 127.0.0.1, então o fluxo completo passa por HTTP sem chamar nenhuma API real.
 """
 import contextlib
+import errno
 import io
 import json
 import os
@@ -587,6 +588,17 @@ class TestServidorConfig(unittest.TestCase):
         self.assertIn('Outro servidor já usa essa porta: feche-o ou troque "porta"', saida.stderr)
         self.assertNotIn("is in use by another program", saida.stderr)  # aviso do Werkzeug, em inglês
         self.assertNotIn("Traceback", saida.stderr)
+
+    def test_porta_proibida_depende_de_ser_baixa_ou_reservada(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            servidor = carregar_servidor(Path(tmp) / "servidor")
+        proibido = PermissionError(errno.EACCES, "Permission denied")
+        for porta, dica in ((80, "O sistema só deixa usar portas acima de 1024"),
+                            (8000, "algumas ficam reservadas pelo Hyper-V ou pelo WSL")):
+            with self.subTest(porta=porta), mock.patch.object(servidor.socket.socket, "bind", side_effect=proibido), \
+                    self.assertRaises(SystemExit) as saida:
+                servidor.abrir_socket("127.0.0.1", porta)
+            self.assertIn(dica, str(saida.exception.code))
 
     def test_host_que_nao_e_deste_aparelho(self):
         saida = self.rodar_servidor({**self.VALIDO, "host": "192.0.2.123"})  # faixa reservada para exemplos
