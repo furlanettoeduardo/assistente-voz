@@ -193,6 +193,13 @@ class LLMFalso:
                         return self._responder(404, {"error": {"message": "rota não encontrada"}})
                     if falso.status_modelos != 200:
                         return self._responder(falso.status_modelos, {"error": {"message": "Invalid API Key"}})
+                    if falso.modelos is None:  # imita uma página web respondendo no lugar da API
+                        pagina = b"<!doctype html><title>Painel</title>"
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/html")
+                        self.send_header("Content-Length", str(len(pagina)))
+                        self.end_headers()
+                        return self.wfile.write(pagina)
                     self._responder(200, {"object": "list", "data": [{"id": m} for m in falso.modelos]})
 
             def do_POST(self):

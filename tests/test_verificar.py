@@ -53,7 +53,7 @@ class TestVerificar(unittest.TestCase):
                        "llm_api_key": CHAVE, "llm_model": "qwen-falso", "pc_url": self.servidor_agente.url,
                        "pc_token": TOKEN, "porta": 8000}
 
-    def verificar(self, config="padrao") -> tuple[int, str]:
+    def verificar(self, config="padrao", **substituir) -> tuple[int, str]:
         """Roda o main() do verificar.py numa cópia da pasta, com o Groq apontando para o falso."""
         pasta = copiar_componente(PASTA_SERVIDOR, Path(self.tmp.name) / f"servidor{next(_pastas)}")
         if config is not None:
@@ -70,7 +70,11 @@ class TestVerificar(unittest.TestCase):
                 importlib.import_module("servidor").GROQ_URL = self.llm.url
             except (SystemExit, ImportError):
                 pass  # config inválido ou Flask ausente: o próprio verificar vai explicar
-            codigo = verificar.main()
+            with contextlib.ExitStack() as pilha:
+                for nome, falso in substituir.items():  # troca funções do verificar.py neste teste
+                    pilha.enter_context(mock.patch.object(verificar, nome, falso))
+                codigo = verificar.executar()
+        self.pasta, self.modulo = pasta, verificar
         return codigo, saida.getvalue()
 
     def test_tudo_certo(self):
@@ -101,7 +105,9 @@ class TestVerificar(unittest.TestCase):
             codigo, saida = self.verificar()
         self.assertEqual(codigo, 2)
         self.assertIn("FALHOU: faltam as bibliotecas: flask.", saida)
-        self.assertIn("pip install -r requirements.txt", saida)
+        caminho = self.modulo.caminho  # ~/... no Termux, caminho completo nos outros casos
+        self.assertIn(f"pip install -r {caminho(self.pasta / 'requirements.txt')}", saida)
+        self.assertIn(f"bash {caminho(self.pasta.parent / 'scripts' / 'termux-instalar.sh')}", saida)
 
     def test_valores_de_exemplo(self):
         exemplo = json.loads((PASTA_SERVIDOR / "config_servidor.example.json").read_text(encoding="utf-8"))
@@ -109,6 +115,9 @@ class TestVerificar(unittest.TestCase):
         codigo, saida = self.verificar(config)
         self.assertEqual(codigo, 1)
         self.assertIn("ainda com o valor de exemplo: groq_api_key, llm_model.", saida)
+        # Caminho completo: no fluxo do README o terminal fica na raiz, não em celular_servidor.
+        arquivo = self.modulo.caminho(self.pasta / "config_servidor.json")
+        self.assertIn(f"preencha esses valores em {arquivo} (no Termux: nano {arquivo})", saida)
         self.assertIn("PULADO: preencha groq_api_key primeiro.", saida)
         self.assertIn("PULADO: preencha llm_api_key e llm_model primeiro.", saida)
         self.assertEqual(self.llm.pedidos, [], "não deveria chamar a API com chave de exemplo")
@@ -166,6 +175,28 @@ class TestVerificar(unittest.TestCase):
         codigo, saida = self.verificar(config={**self.config, "pc_url": self.llm.url})
         self.assertEqual(codigo, 1)
         self.assertIn("mas não parece ser o agente (erro 404)", saida)
+
+    def test_api_que_responde_uma_pagina_web(self):
+        self.llm.modelos = None  # 200 com HTML no lugar da lista de modelos
+        codigo, saida = self.verificar()
+        self.assertEqual(codigo, 1)
+        self.assertIn("FALHOU: o Groq respondeu, mas não com a lista de modelos esperada", saida)
+        self.assertNotIn("sem conexão", saida)
+
+    def test_erro_inesperado_tem_codigo_proprio(self):
+        def quebrar(*args):
+            raise RuntimeError("falha de teste")
+        codigo, saida = self.verificar(verificar_agente=quebrar)
+        self.assertEqual(codigo, 3)
+        self.assertIn("O diagnóstico parou por um erro inesperado (detalhe técnico: RuntimeError('falha de teste'))",
+                      saida)
+
+    def test_ctrl_c_tem_codigo_proprio(self):
+        def interromper(*args):
+            raise KeyboardInterrupt
+        codigo, saida = self.verificar(verificar_groq=interromper)
+        self.assertEqual(codigo, 130)
+        self.assertIn("Diagnóstico interrompido.", saida)
 
     def test_mensagens_so_em_portugues(self):
         # Mesmo com tudo falhando, nenhuma mensagem crua em inglês chega à tela.

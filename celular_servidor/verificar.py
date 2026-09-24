@@ -6,15 +6,28 @@ as chaves, só pede a lista de modelos.
 Rodar:  python verificar.py   (na pasta celular_servidor)
 
 Código de saída: 0 tudo certo; 1 há problemas, mas o servidor consegue subir;
-2 o servidor nem sobe (Python, bibliotecas ou config).
+2 o servidor nem sobe (Python, bibliotecas ou config); 3 o diagnóstico quebrou; 130 interrompido.
 """
 import importlib
 import json
+import os
 import sys
+from pathlib import Path
 from urllib.parse import urlsplit
 
-TUDO_CERTO, COM_PROBLEMAS, NAO_SOBE = 0, 1, 2
+TUDO_CERTO, COM_PROBLEMAS, NAO_SOBE, QUEBROU, INTERROMPIDO = 0, 1, 2, 3, 130
 TOTAL = 6
+PASTA = Path(__file__).resolve().parent
+
+
+def caminho(arquivo: Path) -> str:
+    """Caminho completo para as dicas (a pasta atual do usuário varia); no Termux, abreviado com ~."""
+    try:
+        if os.name == "posix":
+            return f"~/{arquivo.relative_to(Path.home())}"
+    except ValueError:
+        pass
+    return str(arquivo)
 REDE_PRIVADA = ("no Windows, a rede Wi-Fi precisa estar como Rede privada: Configurações > Rede e Internet > "
                 "Wi-Fi > propriedades da sua rede > Tipo de perfil de rede")
 
@@ -53,8 +66,8 @@ def verificar_instalacao() -> bool:
             faltando.append(modulo)
     if faltando:
         falhou(f"faltam as bibliotecas: {', '.join(faltando)}.",
-               "na pasta celular_servidor, rode: pip install -r requirements.txt",
-               "no Termux, dá para rodar tudo de uma vez: bash scripts/termux-instalar.sh")
+               f"rode: pip install -r {caminho(PASTA / 'requirements.txt')}",
+               f"no Termux, dá para rodar tudo de uma vez: bash {caminho(PASTA.parent / 'scripts' / 'termux-instalar.sh')}")
         return False
     ok(f"Python {sys.version.split()[0]} com Flask e requests instalados.")
     return True
@@ -145,13 +158,15 @@ def verificar_modelo(srv) -> bool:
 def explicar_falha_de_api(srv, erro, servico: str, chave: str, *dicas: str) -> None:
     """`erro` é a exceção de rede, a resposta HTTP com erro ou a falha ao ler a lista."""
     requests = srv.requests
-    if isinstance(erro, requests.RequestException):
+    # Antes da RequestException: o erro de JSON do requests é das duas classes, e aqui a rede funcionou.
+    if isinstance(erro, (ValueError, KeyError, TypeError)):
+        falhou(f"{servico} respondeu, mas não com a lista de modelos esperada (uma página web, talvez).",
+               "confira o endereço; a API precisa terminar em /v1, como https://api.groq.com/openai/v1", *dicas)
+    elif isinstance(erro, requests.RequestException):
         if isinstance(erro, requests.Timeout) and not isinstance(erro, requests.ConnectionError):
             falhou(f"{servico} demorou demais para responder.", "tente de novo em alguns minutos", *dicas)
         else:
             falhou(f"sem conexão com {servico}.", "confira a internet do celular (Wi-Fi ou dados móveis)", *dicas)
-    elif isinstance(erro, Exception):
-        falhou(f"{servico} mandou uma lista de modelos que não entendi.", *dicas)
     elif erro.status_code == 401:
         falhou(f"{servico} recusou a chave em {chave}.", *dicas)
     elif erro.status_code == 404:
@@ -225,8 +240,9 @@ def main() -> int:
     problemas = 0
     exemplo = valores_de_exemplo(srv)
     if exemplo:
+        arquivo = caminho(srv.ARQUIVO_CONFIG)
         falhou(f"ainda com o valor de exemplo: {', '.join(exemplo)}.",
-               "edite o config_servidor.json (no Termux: nano config_servidor.json) e preencha esses valores")
+               f"preencha esses valores em {arquivo} (no Termux: nano {arquivo})")
         problemas += 1
     else:
         ok(f"config_servidor.json válido. O servidor vai abrir em http://localhost:{srv.PORTA}.")
@@ -259,5 +275,17 @@ def main() -> int:
     return TUDO_CERTO
 
 
+def executar() -> int:
+    """main() com códigos próprios para Ctrl+C e erro inesperado, que não podem parecer "problemas"."""
+    try:
+        return main()
+    except KeyboardInterrupt:
+        print("\nDiagnóstico interrompido.")
+        return INTERROMPIDO
+    except Exception as e:
+        print(f"\nO diagnóstico parou por um erro inesperado (detalhe técnico: {e!r}).")
+        return QUEBROU
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(executar())
