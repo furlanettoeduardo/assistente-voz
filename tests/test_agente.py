@@ -277,6 +277,23 @@ class TestAgenteConfig(unittest.TestCase):
                         self.assertEqual(r.status, 200)
         self.assertEqual(popen.call_count, 3)
 
+    def test_comando_inexistente_explica_em_portugues(self):
+        agente, servidor = iniciar_agente(self.pasta.parent / "agente-inexistente", TOKEN,
+                                          {"fantasma": ["programa-que-nao-existe-xyz"]})
+        self.addCleanup(servidor.parar)
+        pedido = urllib.request.Request(servidor.url + "/abrir", data=b'{"programa": "fantasma"}',
+                                        headers={"Authorization": f"Bearer {TOKEN}"})
+        with contextlib.redirect_stdout(io.StringIO()) as console, self.assertRaises(urllib.error.HTTPError) as erro:
+            SEM_PROXY.open(pedido, timeout=10)
+        with erro.exception as resposta:
+            self.assertEqual(resposta.code, 500)
+            self.assertEqual(json.loads(resposta.read()), {"erro": "não encontrei 'programa-que-nao-existe-xyz' no PC; "
+                                                                   "confira o comando de 'fantasma' no config_agente.json"})
+        self.assertIn("detalhe técnico", console.getvalue())
+        self.assertEqual(agente.explicar_falha("fantasma", PermissionError()),
+                         "o PC não deu permissão para executar 'programa-que-nao-existe-xyz'")
+        self.assertEqual(agente.explicar_falha("fantasma", OSError()), "o PC não conseguiu abrir 'fantasma'")
+
     def test_exemplo_tem_as_chaves_que_o_codigo_usa(self):
         exemplo = json.loads((PASTA_AGENTE / "config_agente.example.json").read_text(encoding="utf-8"))
         self.assertLessEqual({"token", "porta", "programas"}, set(exemplo))

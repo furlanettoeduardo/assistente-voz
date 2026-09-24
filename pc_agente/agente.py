@@ -101,6 +101,16 @@ def abrir_programa(nome: str) -> None:
     subprocess.Popen(comando, **opcoes)  # shell=False: nada de comandos livres
 
 
+def explicar_falha(nome: str, erro: OSError) -> str:
+    """Traduz a falha do sistema ao abrir um programa (no Linux a mensagem original vem em inglês)."""
+    executavel = PROGRAMAS[nome][0]
+    if isinstance(erro, FileNotFoundError):
+        return f"não encontrei '{executavel}' no PC; confira o comando de '{nome}' no config_agente.json"
+    if isinstance(erro, PermissionError):
+        return f"o PC não deu permissão para executar '{executavel}'"
+    return f"o PC não conseguiu abrir '{nome}'"
+
+
 class Handler(BaseHTTPRequestHandler):
     timeout = 10  # segundos; uma conexão parada não prende a thread para sempre
     LIMITE_CORPO = 64 * 1024  # os pedidos do celular têm poucos bytes
@@ -162,7 +172,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             abrir_programa(nome)
         except OSError as e:
-            return self._responder(500, {"erro": f"falha ao abrir '{nome}': {e}"})
+            print(f"[agente] não consegui abrir '{nome}' (detalhe técnico: {e})")
+            return self._responder(500, {"erro": explicar_falha(nome, e)})
 
         print(f"[agente] abriu: {nome}")
         self._responder(200, {"ok": True, "programa": nome})
