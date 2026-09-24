@@ -182,6 +182,28 @@ class TestAgenteConfig(unittest.TestCase):
         (self.pasta / "config_agente.json").write_text(json.dumps(config), encoding="utf-8-sig")
         self.assertEqual(importar_copia(self.pasta, "agente").TOKEN, TOKEN)
 
+    def test_nomes_com_maiusculas_no_config_abrem(self):
+        # O servidor põe no enum da ferramenta os nomes que /programas devolve, e o LLM manda
+        # exatamente esse texto de volta: os dois lados precisam usar a mesma forma.
+        comando = ["programa-que-nao-roda"]
+        agente, servidor = iniciar_agente(self.pasta.parent / "agente-maiusculas", TOKEN,
+                                          {"VS Code": comando, " Bloco  de Notas ": comando})
+        self.addCleanup(servidor.parar)
+        cabecalhos = {"Authorization": f"Bearer {TOKEN}"}
+        with SEM_PROXY.open(urllib.request.Request(servidor.url + "/programas", headers=cabecalhos),
+                         timeout=10) as r:
+            self.assertEqual(json.loads(r.read()), {"programas": ["bloco de notas", "vs code"]})
+
+        with mock.patch.object(agente.subprocess, "Popen") as popen, \
+                contextlib.redirect_stdout(io.StringIO()):
+            for pedido in ("vs code", "VS Code", "  bloco de   notas"):
+                with self.subTest(pedido=pedido):
+                    corpo = json.dumps({"programa": pedido}).encode("utf-8")
+                    with SEM_PROXY.open(urllib.request.Request(servidor.url + "/abrir", data=corpo,
+                                                            headers=cabecalhos), timeout=10) as r:
+                        self.assertEqual(r.status, 200)
+        self.assertEqual(popen.call_count, 3)
+
     def test_exemplo_tem_as_chaves_que_o_codigo_usa(self):
         exemplo = json.loads((PASTA_AGENTE / "config_agente.example.json").read_text(encoding="utf-8"))
         self.assertLessEqual({"token", "porta", "programas"}, set(exemplo))

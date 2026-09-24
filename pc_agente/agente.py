@@ -36,11 +36,17 @@ def carregar_config(caminho: Path) -> dict:
         )
 
 
+def normalizar(nome) -> str:
+    """Compara nomes sem diferenciar maiúsculas nem espaços extras ("VS  Code " == "vs code")."""
+    return " ".join(str(nome).split()).lower()
+
+
 CONFIG = carregar_config(BASE / "config_agente.json")
 
 TOKEN = CONFIG["token"]
 PORTA = int(CONFIG.get("porta", 8765))
-PROGRAMAS = CONFIG["programas"]  # nome -> comando (lista de strings)
+PROGRAMAS = {normalizar(nome): comando  # nome -> comando (lista de strings)
+             for nome, comando in CONFIG["programas"].items()}
 
 if TOKEN == "TROQUE-ESTE-TOKEN":
     sys.exit("Defina um token próprio em config_agente.json antes de rodar.")
@@ -108,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(pedido, dict):
             return self._responder(400, {"erro": "JSON inválido"})
 
-        nome = str(pedido.get("programa", "")).lower().strip()
+        nome = normalizar(pedido.get("programa", ""))
         if nome not in PROGRAMAS:
             return self._responder(404, {"erro": f"programa '{nome}' não está na lista"})
 
