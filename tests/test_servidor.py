@@ -307,6 +307,16 @@ class TestServidor(unittest.TestCase):
     def test_texto_vazio(self):
         self.assertEqual(self.enviar_texto("   ").status_code, 400)
 
+    def test_corpo_malformado_em_texto_recebe_400_em_json(self):
+        casos = [["abre"], "abre", 5, None, {"texto": None}, {"texto": 5}, {"texto": ["abre"]}, {"outro": "abre"}]
+        for corpo in casos:
+            with self.subTest(corpo=corpo):
+                r = self.cliente.post("/texto", json=corpo)
+                self.assertEqual((r.status_code, r.get_json()), (400, {"erro": "Digite um comando."}))
+        r = self.cliente.post("/texto", data=b"{quebrado", content_type="application/json")
+        self.assertEqual((r.status_code, r.get_json()), (400, {"erro": "Digite um comando."}))
+        self.assertEqual(self.llm.pedidos, [])
+
     def test_pagina_inicial(self):
         r = self.cliente.get("/")
         self.addCleanup(r.close)

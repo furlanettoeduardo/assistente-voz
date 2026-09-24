@@ -243,7 +243,9 @@ def voz():
 
 @app.post("/texto")
 def texto():
-    frase = (request.get_json(silent=True) or {}).get("texto", "").strip()
+    dados = request.get_json(silent=True)
+    frase = dados.get("texto") if isinstance(dados, dict) else None
+    frase = frase.strip() if isinstance(frase, str) else ""
     if not frase:
         return jsonify(erro="Digite um comando."), 400
     try:
