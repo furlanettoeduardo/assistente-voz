@@ -5,6 +5,8 @@ Fluxo: áudio -> Whisper (Groq) -> LLM com ferramentas -> agente do PC -> respos
 
 Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo aparelho.
 """
+import contextlib
+import io
 import json
 import logging
 import re
@@ -346,10 +348,14 @@ def texto():
 if __name__ == "__main__":
     # make_server no lugar de app.run: mesmo servidor do Flask, sem o aviso e o log em inglês.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    aviso = io.StringIO()
     try:
-        servidor = make_server(HOST, PORTA, app, threaded=True)
-    except OSError as e:
-        sys.exit(f"Não consegui escutar em {HOST}:{PORTA} (detalhe técnico: {e}).\n"
+        # Com a porta ocupada, o Werkzeug imprime um aviso em inglês e chama sys.exit por conta própria.
+        with contextlib.redirect_stderr(aviso):
+            servidor = make_server(HOST, PORTA, app, threaded=True)
+    except (OSError, SystemExit) as e:
+        detalhe = (aviso.getvalue().strip().splitlines() or [str(e)])[0]
+        sys.exit(f"Não consegui escutar em {HOST}:{PORTA} (detalhe técnico: {detalhe}).\n"
                  'Feche o outro servidor que usa essa porta ou troque "porta" no config_servidor.json.')
     print(f"[servidor] pronto: abra http://localhost:{servidor.server_port} no navegador deste aparelho.")
     print("[servidor] para parar, aperte Ctrl+C.", flush=True)

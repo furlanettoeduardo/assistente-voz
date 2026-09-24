@@ -542,6 +542,8 @@ class TestServidorConfig(unittest.TestCase):
             saida = self.rodar_servidor({**self.VALIDO, "porta": ocupada.getsockname()[1]})
         self.assertEqual(saida.returncode, 1)
         self.assertIn("Não consegui escutar em 127.0.0.1:", saida.stderr)
+        self.assertIn('troque "porta" no config_servidor.json', saida.stderr)
+        self.assertNotIn("is in use by another program", saida.stderr)  # aviso do Werkzeug, em inglês
         self.assertNotIn("Traceback", saida.stderr)
 
     def test_config_invalido_encerra_com_mensagem(self):
