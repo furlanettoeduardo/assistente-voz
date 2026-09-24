@@ -24,9 +24,12 @@ _contador = itertools.count()
 
 
 def _fora_da_copia(pasta: str, nomes: list[str]) -> list[str]:
-    """Caches e configs reais, inclusive cópias como "config_agente (1).json" (os mesmos do .gitignore)."""
+    """
+    Caches, ambientes virtuais e configs reais, inclusive cópias como "config_agente (1).json"
+    (os mesmos do .gitignore). Um .venv dentro da pasta deixaria cada cópia lenta.
+    """
     exemplos = {"config_agente.example.json", "config_servidor.example.json"}
-    return [nome for nome in nomes if nome == "__pycache__" or (
+    return [nome for nome in nomes if nome in {"__pycache__", ".venv", "venv"} or (
         nome not in exemplos and (fnmatch.fnmatch(nome, "config_agente*.json*")
                                   or fnmatch.fnmatch(nome, "config_servidor*.json*")))]
 
