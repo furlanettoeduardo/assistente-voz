@@ -59,6 +59,22 @@ def abrir_programa(nome: str) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 10  # segundos; uma conexão parada não prende a thread para sempre
+    LIMITE_CORPO = 64 * 1024  # os pedidos do celular têm poucos bytes
+
+    def _ler_corpo(self) -> bytes | None:
+        """
+        Lê o corpo antes de qualquer resposta. Se o agente responde sem ler, o Windows
+        derruba a conexão e o cliente recebe um erro de rede em vez do 401 ou 404.
+        """
+        try:
+            tamanho = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return None
+        if not 0 <= tamanho <= self.LIMITE_CORPO:
+            return None
+        return self.rfile.read(tamanho)
+
     def _responder(self, status: int, dados: dict) -> None:
         corpo = json.dumps(dados, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -79,15 +95,17 @@ class Handler(BaseHTTPRequestHandler):
         self._responder(404, {"erro": "rota não encontrada"})
 
     def do_POST(self):
+        corpo = self._ler_corpo()
         if not self._autorizado():
             return self._responder(401, {"erro": "token inválido"})
         if self.path != "/abrir":
             return self._responder(404, {"erro": "rota não encontrada"})
 
         try:
-            tamanho = int(self.headers.get("Content-Length", 0))
-            pedido = json.loads(self.rfile.read(tamanho) or b"{}")
-        except (ValueError, json.JSONDecodeError):
+            pedido = json.loads(corpo)
+        except (TypeError, ValueError):  # tamanho inválido (corpo None), corpo vazio ou JSON quebrado
+            pedido = None
+        if not isinstance(pedido, dict):
             return self._responder(400, {"erro": "JSON inválido"})
 
         nome = str(pedido.get("programa", "")).lower().strip()

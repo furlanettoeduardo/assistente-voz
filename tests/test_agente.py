@@ -1,8 +1,10 @@
 """Testes do agente do PC. Usam só a biblioteca padrão, como o próprio agente."""
 import contextlib
+import http.client
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -10,6 +12,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 from tests.auxiliares import (PASTA_AGENTE, comando_de_teste, copiar_componente, esperar_arquivo,
                               importar_copia, iniciar_agente, vigiar_popen)
@@ -93,8 +96,52 @@ class TestAgenteHTTP(unittest.TestCase):
         self.assertTrue(esperar_arquivo(self.marcador), "o programa de teste não chegou a rodar")
 
     def test_json_invalido(self):
-        self.assertEqual(self.pedir("POST", "/abrir", corpo=b"isto nao e json"),
-                         (400, {"erro": "JSON inválido"}))
+        popen = vigiar_popen(self, self.agente)
+        for corpo in (b"isto nao e json", b"", b"[]", b"null", b'"programa de teste"', b"1"):
+            with self.subTest(corpo=corpo):
+                self.assertEqual(self.pedir("POST", "/abrir", corpo=corpo),
+                                 (400, {"erro": "JSON inválido"}))
+        popen.assert_not_called()
+
+    def test_content_length_invalido(self):
+        popen = vigiar_popen(self, self.agente)
+        for tamanho in ("abc", "-1", str(10**9)):
+            with self.subTest(tamanho=tamanho):
+                conexao = http.client.HTTPConnection("127.0.0.1", self.servidor.httpd.server_port, timeout=10)
+                self.addCleanup(conexao.close)
+                conexao.request("POST", "/abrir", body=b"",
+                                headers={"Authorization": f"Bearer {TOKEN}", "Content-Length": tamanho})
+                resposta = conexao.getresponse()
+                self.assertEqual((resposta.status, json.loads(resposta.read())), (400, {"erro": "JSON inválido"}))
+        popen.assert_not_called()
+
+    def test_le_o_corpo_antes_de_recusar(self):
+        # Respondendo sem ler o corpo, o Windows às vezes derrubava a conexão do cliente
+        # (ConnectionAbortedError, WinError 10053) em vez de entregar o 401 ou o 404.
+        corpo = json.dumps({"programa": "programa de teste"}).encode("utf-8")
+        for caminho, token, esperado in [("/abrir", "errado", b" 401 "), ("/programas", TOKEN, b" 404 ")]:
+            with self.subTest(caminho=caminho), \
+                    socket.create_connection(("127.0.0.1", self.servidor.httpd.server_port), timeout=10) as s:
+                s.sendall(f"POST {caminho} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n"
+                          f"Content-Length: {len(corpo)}\r\n\r\n".encode("utf-8"))
+                s.settimeout(0.5)
+                with self.assertRaises(TimeoutError, msg="respondeu antes de receber o corpo"):
+                    s.recv(1024)
+                s.settimeout(10)
+                s.sendall(corpo)
+                resposta = b""
+                while pedaco := s.recv(4096):
+                    resposta += pedaco
+                self.assertIn(esperado, resposta.split(b"\r\n", 1)[0])
+
+    def test_pedido_incompleto_nao_abre_programa(self):
+        popen = vigiar_popen(self, self.agente)
+        with mock.patch.object(self.agente.Handler, "timeout", 0.5):
+            with socket.create_connection(("127.0.0.1", self.servidor.httpd.server_port), timeout=10) as s:
+                s.sendall(f"POST /abrir HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n"
+                          "Content-Length: 100\r\n\r\n{\"programa\": \"programa de".encode("utf-8"))
+                self.assertEqual(s.recv(1024), b"", "o agente deveria fechar a conexão parada")
+        popen.assert_not_called()
 
     def test_rota_desconhecida(self):
         self.assertEqual(self.pedir("GET", "/abrir")[0], 404)
