@@ -137,8 +137,8 @@ def resposta_ferramenta(id_chamada: str, nome: str, argumentos: dict, conteudo=N
 
 class LLMFalso:
     """
-    Imita /chat/completions e /audio/transcriptions. Cada pedido de chat consome a próxima
-    resposta de `respostas` (tupla status, corpo) e fica guardado em `pedidos` para conferência.
+    Imita /chat/completions, /audio/transcriptions e GET /models. Cada pedido de chat consome a
+    próxima resposta de `respostas` (tupla status, corpo) e fica guardado em `pedidos` para conferência.
     """
 
     def __init__(self):
@@ -154,6 +154,8 @@ class LLMFalso:
             self.pedidos: list[dict] = []
             self.transcricao = ""
             self.status_transcricao = 200
+            self.modelos = ["whisper-falso", "qwen-falso"]
+            self.status_modelos = 200
 
     def programar(self, *corpos, status: int = 200) -> None:
         self.programar_com_status(*[(status, corpo) for corpo in corpos])
@@ -180,6 +182,15 @@ class LLMFalso:
                 self.send_header("Content-Length", str(len(corpo)))
                 self.end_headers()
                 self.wfile.write(corpo)
+
+            def do_GET(self):
+                with falso._trava:
+                    falso.pedidos.append({"caminho": self.path, "cabecalhos": dict(self.headers), "corpo": b""})
+                    if self.path != "/models":
+                        return self._responder(404, {"error": {"message": "rota não encontrada"}})
+                    if falso.status_modelos != 200:
+                        return self._responder(falso.status_modelos, {"error": {"message": "Invalid API Key"}})
+                    self._responder(200, {"object": "list", "data": [{"id": m} for m in falso.modelos]})
 
             def do_POST(self):
                 corpo = self.rfile.read(int(self.headers.get("Content-Length", 0)))
