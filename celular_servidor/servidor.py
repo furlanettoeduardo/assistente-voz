@@ -13,11 +13,16 @@ import socket
 import sys
 import traceback
 from pathlib import Path
+from urllib.parse import urlsplit
 
-import requests
-from flask import Flask, jsonify, request, send_from_directory
-from werkzeug.exceptions import HTTPException
-from werkzeug.serving import make_server
+try:
+    import requests
+    from flask import Flask, jsonify, request, send_from_directory
+    from werkzeug.exceptions import HTTPException
+    from werkzeug.serving import make_server
+except ImportError as e:  # o .venv não foi ativado ou o requirements não foi instalado
+    sys.exit(f"Falta a biblioteca {e.name}. Na pasta celular_servidor, rode: pip install -r requirements.txt\n"
+             "No PC, ative antes o .venv; no Termux, dá para rodar bash scripts/termux-instalar.sh na pasta do projeto.")
 
 BASE = Path(__file__).parent
 ARQUIVO_CONFIG = BASE / "config_servidor.json"
@@ -71,6 +76,16 @@ def carregar_config(caminho: Path, obrigatorias: dict) -> dict:
     return config
 
 
+def url_valida(url: str) -> bool:
+    """http(s)://, um host e, se houver, uma porta que exista."""
+    try:
+        partes = urlsplit(url)
+        partes.port  # levanta ValueError para porta inválida ou colchete sobrando
+    except ValueError:
+        return False
+    return partes.scheme in ("http", "https") and bool(partes.hostname)
+
+
 def ler_porta(config: dict, caminho: Path, padrao: int) -> int:
     """A porta pode vir como número ou texto ("8000"), mas precisa estar entre 0 e 65535."""
     try:
@@ -85,9 +100,10 @@ def ler_porta(config: dict, caminho: Path, padrao: int) -> int:
 CFG = carregar_config(ARQUIVO_CONFIG, dict.fromkeys((
     "groq_api_key", "stt_model", "llm_base_url", "llm_api_key", "llm_model", "pc_url", "pc_token"), str))
 for _chave in ("pc_url", "llm_base_url"):
-    if not CFG[_chave].startswith(("http://", "https://")):
-        sys.exit(f'Em {ARQUIVO_CONFIG}, "{_chave}" precisa começar com http:// ou https://, '
-                 "como em config_servidor.example.json.")
+    if not url_valida(CFG[_chave].strip()):
+        sys.exit(f'Em {ARQUIVO_CONFIG}, "{_chave}" precisa ser um endereço completo, começando com http:// '
+                 "ou https://, como em config_servidor.example.json.")
+    CFG[_chave] = CFG[_chave].strip()
 # Chaves e token vão em cabeçalho HTTP, que só aceita latin-1: aspas curvas ou espaços invisíveis
 # colados junto derrubariam cada pedido com UnicodeEncodeError.
 for _chave in ("groq_api_key", "llm_api_key", "pc_token"):

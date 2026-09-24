@@ -497,7 +497,10 @@ class TestServidorConfig(unittest.TestCase):
             ({"pc_url": None}, '"pc_url" precisa ser um texto entre aspas'),
             ({"llm_base_url": 8}, '"llm_base_url" precisa ser um texto entre aspas'),
             ({"pc_token": 123}, '"pc_token" precisa ser um texto entre aspas'),
-            ({"pc_url": "192.168.0.10:8765"}, '"pc_url" precisa começar com http:// ou https://'),
+            ({"pc_url": "192.168.0.10:8765"}, '"pc_url" precisa ser um endereço completo, começando com http://'),
+            ({"pc_url": "http://192.168.0.10]:8765"}, '"pc_url" precisa ser um endereço completo'),
+            ({"pc_url": "http://:8765"}, '"pc_url" precisa ser um endereço completo'),
+            ({"llm_base_url": "https://api.groq.com:99999/openai/v1"}, '"llm_base_url" precisa ser um endereço completo'),
             ({"porta": ""}, '"porta" precisa ser um número entre 0 e 65535'),
             ({"porta": 70000}, '"porta" precisa ser um número entre 0 e 65535'),
             ({"host": 127}, '"host" precisa ser um texto'),
@@ -524,6 +527,13 @@ class TestServidorConfig(unittest.TestCase):
                 self.assertIn(mensagem, saida.stderr)
                 self.assertNotIn("Traceback", saida.stderr)
                 self.assertNotIn("token-colado", saida.stderr, "a mensagem não deve repetir o segredo")
+
+    def test_sem_as_bibliotecas_explica_como_instalar(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, \
+                mock.patch.dict(sys.modules, {"requests": None}), self.assertRaises(SystemExit) as saida:
+            carregar_servidor(Path(tmp) / "servidor")
+        self.assertIn("Falta a biblioteca requests.", str(saida.exception.code))
+        self.assertIn("pip install -r requirements.txt", str(saida.exception.code))
 
     def test_espacos_em_volta_das_chaves_sao_removidos(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

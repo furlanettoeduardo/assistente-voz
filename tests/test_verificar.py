@@ -94,7 +94,7 @@ class TestVerificar(unittest.TestCase):
     def test_config_invalido(self):
         codigo, saida = self.verificar(config={**self.config, "pc_url": "192.168.0.10:8765"})
         self.assertEqual(codigo, 2)
-        self.assertIn('"pc_url" precisa começar com http:// ou https://', saida)
+        self.assertIn('"pc_url" precisa ser um endereço completo, começando com http://', saida)
 
     def test_sem_flask(self):
         with mock.patch.dict(sys.modules, {"flask": None}):
