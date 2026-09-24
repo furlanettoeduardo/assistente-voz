@@ -6,10 +6,15 @@ import contextlib
 import io
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -497,6 +502,47 @@ class TestServidorConfig(unittest.TestCase):
             servidor = carregar_servidor(Path(tmp) / "servidor", pc_token=f"  {TOKEN} ", llm_api_key=" chave\n")
         self.assertEqual(servidor.PC_HEADERS, {"Authorization": f"Bearer {TOKEN}"})
         self.assertEqual(servidor.LLM_HEADERS, {"Authorization": "Bearer chave"})
+
+    def test_inicio_mostra_so_mensagens_em_portugues_e_serve_a_pagina(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            pasta = copiar_componente(PASTA_SERVIDOR, Path(tmp) / "servidor")
+            (pasta / "config_servidor.json").write_text(json.dumps(self.VALIDO), encoding="utf-8")
+            processo = subprocess.Popen(
+                [sys.executable, "-u", str(pasta / "servidor.py")], cwd=pasta, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+            linhas = []
+            leitor = threading.Thread(target=lambda: linhas.extend(processo.stdout), daemon=True)
+            leitor.start()
+            try:
+                limite = time.monotonic() + 30
+                while not any("[servidor] pronto" in linha for linha in linhas) and time.monotonic() < limite:
+                    self.assertIsNone(processo.poll(), "".join(linhas))
+                    time.sleep(0.05)
+                pronto = next(linha for linha in linhas if "[servidor] pronto" in linha)
+                url = re.search(r"http://localhost:\d+", pronto).group(0)
+                sem_proxy = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with sem_proxy.open(url, timeout=10) as r:
+                    self.assertIn("Segure para falar", r.read().decode("utf-8"))
+            finally:
+                processo.terminate()
+                processo.wait(timeout=15)
+                leitor.join(timeout=5)
+                processo.stdout.close()
+        saida = "".join(linhas)
+        self.assertIn("[servidor] para parar, aperte Ctrl+C.", saida)
+        for ingles in ("Serving Flask app", "development server", "Running on", "GET / HTTP"):
+            self.assertNotIn(ingles, saida)
+
+    @unittest.skipIf(sys.platform == "win32", "no Windows o SO_REUSEADDR deixa dois servidores na mesma porta")
+    def test_porta_ocupada_encerra_com_mensagem(self):
+        with socket.socket() as ocupada:
+            ocupada.bind(("127.0.0.1", 0))
+            ocupada.listen()
+            saida = self.rodar_servidor({**self.VALIDO, "porta": ocupada.getsockname()[1]})
+        self.assertEqual(saida.returncode, 1)
+        self.assertIn("Não consegui escutar em 127.0.0.1:", saida.stderr)
+        self.assertNotIn("Traceback", saida.stderr)
 
     def test_config_invalido_encerra_com_mensagem(self):
         com_acento = {"groq_api_key": "chave-música"}
