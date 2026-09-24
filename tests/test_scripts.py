@@ -59,6 +59,8 @@ class TestScriptsDoTermux(unittest.TestCase):
         self.falsos = Path(tmp.name) / "falsos"
         self.falsos.mkdir()
         self.registro = Path(tmp.name) / "chamadas.log"
+        self.tmpdir = Path(tmp.name) / "tmp"  # o $TMPDIR do Termux, onde fica a trava do termux-iniciar.sh
+        self.tmpdir.mkdir()
 
     def programa_falso(self, nome: str, corpo: str = "") -> None:
         """Cria um executável que anota a chamada em chamadas.log e roda `corpo`."""
@@ -69,7 +71,8 @@ class TestScriptsDoTermux(unittest.TestCase):
     def rodar(self, script: str, **ambiente) -> subprocess.CompletedProcess:
         caminho = f"{self.falsos}:/usr/bin:/bin"  # sem o python e o pkg de verdade
         return subprocess.run([BASH, str(self.raiz / "scripts" / script)], cwd=self.raiz, capture_output=True,
-                              text=True, encoding="utf-8", timeout=60, env={"PATH": caminho, **ambiente})
+                              text=True, encoding="utf-8", timeout=60,
+                              env={"PATH": caminho, "TMPDIR": str(self.tmpdir), **ambiente})
 
     def chamadas(self) -> list[str]:
         return self.registro.read_text(encoding="utf-8").splitlines() if self.registro.exists() else []
@@ -132,6 +135,40 @@ class TestScriptsDoTermux(unittest.TestCase):
         self.assertIn("O servidor não consegue subir assim", saida.stdout)
         self.assertNotIn("python servidor.py", self.chamadas())
         self.assertEqual(self.chamadas()[-1], "termux-wake-unlock ", "o wake lock precisa ser solto")
+
+    def test_iniciar_nao_sobe_se_o_diagnostico_quebra_ou_e_interrompido(self):
+        for codigo, mensagem in ((3, "O diagnóstico não terminou (código 3)"),
+                                 (127, "O diagnóstico não terminou (código 127)"),
+                                 (130, "Diagnóstico interrompido; o servidor não foi iniciado.")):
+            with self.subTest(codigo=codigo):
+                self.registro.unlink(missing_ok=True)
+                saida = self.iniciar(codigo)
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn(mensagem, saida.stdout)
+                self.assertNotIn("python servidor.py", self.chamadas())
+                self.assertFalse((self.tmpdir / "assistente-voz-servidor.pid").exists(), "a trava precisa sumir")
+
+    def test_iniciar_sem_python(self):
+        self.programa_falso("termux-wake-lock")
+        saida = self.rodar("termux-iniciar.sh")
+        self.assertEqual(saida.returncode, 1)
+        self.assertIn("Não encontrei o Python. Rode antes: bash scripts/termux-instalar.sh", saida.stdout)
+        self.assertEqual(self.chamadas(), [], "sem Python, nem mexe no wake lock")
+
+    def test_segunda_execucao_nao_solta_o_wake_lock_da_primeira(self):
+        (self.tmpdir / "assistente-voz-servidor.pid").write_text(str(os.getpid()))  # um processo vivo
+        saida = self.iniciar(0)
+        self.assertEqual(saida.returncode, 1)
+        self.assertIn("O servidor já está rodando em outra sessão do Termux", saida.stdout)
+        self.assertEqual(self.chamadas(), [])
+
+    def test_trava_de_uma_execucao_que_morreu_nao_impede_de_subir(self):
+        morto = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                               capture_output=True, text=True).stdout.strip()
+        (self.tmpdir / "assistente-voz-servidor.pid").write_text(morto)
+        saida = self.iniciar(0)
+        self.assertEqual(saida.returncode, 0, saida.stdout + saida.stderr)
+        self.assertIn("python servidor.py", self.chamadas())
 
 
 if __name__ == "__main__":
