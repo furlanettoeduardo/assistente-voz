@@ -593,7 +593,7 @@ class TestServidorConfig(unittest.TestCase):
     def test_config_invalido_encerra_com_mensagem(self):
         com_acento = {"groq_api_key": "chave-música"}
         casos = [
-            (b'{"pc_url": "http://192.168.0.10:8765", }', "linha 1, coluna 40: vírgula sobrando antes do }"),
+            (b'{"pc_url": "http://192.168.0.10:8765", }', "vírgula sobrando antes do }"),  # coluna muda no 3.13
             (b"[]", "precisa ser um objeto JSON"),
             (json.dumps(com_acento, ensure_ascii=False).encode("cp1252"), "não está em UTF-8"),  # ANSI
             (json.dumps(com_acento, ensure_ascii=False).encode("utf-16"), "não está em UTF-8"),
