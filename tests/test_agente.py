@@ -25,7 +25,7 @@ def rodar_agente(pasta: Path) -> subprocess.CompletedProcess:
     """Roda `python agente.py` numa pasta e devolve a saída, com timeout para não travar."""
     return subprocess.run(
         [sys.executable, str(pasta / "agente.py")], cwd=pasta, capture_output=True,
-        text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=30,
+        text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=15,
     )
 
 
@@ -93,6 +93,12 @@ class TestAgenteHTTP(unittest.TestCase):
         args, kwargs = popen.call_args
         self.assertEqual(args[0], comando_de_teste(self.marcador))
         self.assertFalse(kwargs.get("shell", False))
+        for fluxo in ("stdin", "stdout", "stderr"):
+            self.assertIs(kwargs[fluxo], subprocess.DEVNULL)
+        if sys.platform == "win32":
+            self.assertNotIn("start_new_session", kwargs)
+        else:  # o programa não pode fechar junto com o agente
+            self.assertIs(kwargs.get("start_new_session"), True)
         self.assertTrue(esperar_arquivo(self.marcador), "o programa de teste não chegou a rodar")
 
     def test_json_invalido(self):
@@ -135,8 +141,9 @@ class TestAgenteHTTP(unittest.TestCase):
                 self.assertIn(esperado, resposta.split(b"\r\n", 1)[0])
 
     def test_pedido_incompleto_nao_abre_programa(self):
+        self.assertIsNotNone(vars(self.agente.Handler).get("timeout"), "o agente precisa de timeout nas conexões")
         popen = vigiar_popen(self, self.agente)
-        with mock.patch.object(self.agente.Handler, "timeout", 0.5):
+        with mock.patch.object(self.agente.Handler, "timeout", 0.5):  # só para o teste ser rápido
             with socket.create_connection(("127.0.0.1", self.servidor.httpd.server_port), timeout=10) as s:
                 s.sendall(f"POST /abrir HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n"
                           "Content-Length: 100\r\n\r\n{\"programa\": \"programa de".encode("utf-8"))
@@ -195,7 +202,8 @@ class TestAgenteConfig(unittest.TestCase):
         # Com token vazio, um pedido sem cabeçalho Authorization seria aceito.
         for token in (exemplo["token"], "", "   ", None, "senha-ção"):
             with self.subTest(token=token):
-                self.gravar_config(json.dumps({**exemplo, "token": token}, ensure_ascii=False))
+                # Porta 0: se a checagem regredir, o agente escuta numa porta livre em vez da 8765.
+                self.gravar_config(json.dumps({**exemplo, "token": token, "porta": 0}, ensure_ascii=False))
                 saida = rodar_agente(self.pasta)
                 self.assertEqual(saida.returncode, 1)
                 self.assertIn("Defina um token próprio", saida.stderr)
