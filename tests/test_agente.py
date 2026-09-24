@@ -1,13 +1,16 @@
 """Testes do agente do PC. Usam só a biblioteca padrão, como o próprio agente."""
 import contextlib
+import errno
 import http.client
 import io
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -293,6 +296,44 @@ class TestAgenteConfig(unittest.TestCase):
         self.assertEqual(agente.explicar_falha("fantasma", PermissionError()),
                          "o PC não deu permissão para executar 'programa-que-nao-existe-xyz'")
         self.assertEqual(agente.explicar_falha("fantasma", OSError()), "o PC não conseguiu abrir 'fantasma'")
+
+    def test_falha_ao_escutar_explica_em_portugues(self):
+        self.gravar_config(json.dumps({"token": TOKEN, "porta": 8765, "programas": {"calculadora": ["calc.exe"]}}))
+        agente = importar_copia(self.pasta, "agente")
+        ocupada = agente.explicar_falha_ao_escutar(OSError(errno.EADDRINUSE, "Address already in use"))
+        self.assertIn("Não consegui escutar na porta 8765 (detalhe técnico:", ocupada)
+        self.assertIn("Outro agente (ou outro programa) já usa essa porta", ocupada)
+        proibida = agente.explicar_falha_ao_escutar(PermissionError(errno.EACCES, "Permission denied"))
+        self.assertIn("O sistema não deixou usar essa porta", proibida)
+
+    # Os dois abaixo sobem o agente de verdade em 0.0.0.0: no Windows isso abriria o aviso do firewall.
+    @unittest.skipIf(sys.platform == "win32", "sobe o agente em 0.0.0.0, o que aciona o firewall do Windows")
+    def test_ctrl_c_encerra_sem_traceback(self):
+        self.gravar_config(json.dumps({"token": TOKEN, "porta": 0, "programas": {"calculadora": ["calc.exe"]}}))
+        processo = subprocess.Popen([sys.executable, "-u", str(self.pasta / "agente.py")], cwd=self.pasta,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+        primeira = processo.stdout.readline()
+        while "para parar" not in processo.stdout.readline():
+            pass
+        time.sleep(0.3)  # deixa o agente entrar no serve_forever
+        processo.send_signal(signal.SIGINT)
+        resto, _ = processo.communicate(timeout=15)
+        self.assertRegex(primeira, r"\[agente\] escutando na porta [1-9]\d*")  # a porta real, não 0
+        self.assertIn("[agente] encerrado.", resto)
+        self.assertNotIn("Traceback", resto)
+        self.assertEqual(processo.returncode, 0)
+
+    @unittest.skipIf(sys.platform == "win32", "sobe o agente em 0.0.0.0, o que aciona o firewall do Windows")
+    def test_porta_ocupada_encerra_com_mensagem(self):
+        with socket.socket() as ocupada:
+            ocupada.bind(("127.0.0.1", 0))
+            ocupada.listen()
+            porta = ocupada.getsockname()[1]
+            self.gravar_config(json.dumps({"token": TOKEN, "porta": porta, "programas": {"calc": ["calc.exe"]}}))
+            saida = rodar_agente(self.pasta)
+        self.assertEqual(saida.returncode, 1)
+        self.assertIn(f"Não consegui escutar na porta {porta} (detalhe técnico:", saida.stderr)
+        self.assertIn("Outro agente (ou outro programa) já usa essa porta", saida.stderr)
 
     def test_exemplo_tem_as_chaves_que_o_codigo_usa(self):
         exemplo = json.loads((PASTA_AGENTE / "config_agente.example.json").read_text(encoding="utf-8"))

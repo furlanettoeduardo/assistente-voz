@@ -7,6 +7,7 @@ Agente do PC: fica escutando na rede local e abre programas a pedido do celular.
 
 Rodar:  python agente.py
 """
+import errno
 import hmac
 import json
 import subprocess
@@ -188,12 +189,28 @@ class Servidor(ThreadingHTTPServer):
     allow_reuse_address = sys.platform != "win32"
 
 
+def explicar_falha_ao_escutar(erro: OSError) -> str:
+    # 10013 é o "acesso proibido" do Windows, que aparece nas portas reservadas pelo sistema (Hyper-V, WSL).
+    if isinstance(erro, PermissionError) or erro.errno == getattr(errno, "WSAEACCES", None):
+        dica = ('O sistema não deixou usar essa porta (no Windows, algumas ficam reservadas): troque "porta" '
+                "no config_agente.json e em pc_url, por exemplo para 8766.")
+    else:
+        dica = "Outro agente (ou outro programa) já usa essa porta: feche-o e abra o agente de novo."
+    return f"Não consegui escutar na porta {PORTA} (detalhe técnico: {erro}).\n{dica}"
+
+
 if __name__ == "__main__":
     try:
         servidor = Servidor(("0.0.0.0", PORTA), Handler)
     except OSError as e:
-        sys.exit(f"Não consegui escutar na porta {PORTA}: {e}\n"
-                 "Feche o outro agente (ou o programa que usa essa porta) e rode de novo.")
-    print(f"[agente] escutando na porta {PORTA}")
+        sys.exit(explicar_falha_ao_escutar(e))
+    print(f"[agente] escutando na porta {servidor.server_address[1]}")
     print(f"[agente] programas liberados: {', '.join(sorted(PROGRAMAS))}")
-    servidor.serve_forever()
+    print("[agente] para parar, aperte Ctrl+C.", flush=True)
+    try:
+        servidor.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        servidor.server_close()
+    print("[agente] encerrado.")
