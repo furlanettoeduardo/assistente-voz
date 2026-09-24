@@ -68,6 +68,15 @@ for _chave in ("pc_url", "llm_base_url"):
     if not CFG[_chave].startswith(("http://", "https://")):
         sys.exit(f'Em {ARQUIVO_CONFIG}, "{_chave}" precisa começar com http:// ou https://, '
                  "como em config_servidor.example.json.")
+# Chaves e token vão em cabeçalho HTTP, que só aceita latin-1: aspas curvas ou espaços invisíveis
+# colados junto derrubariam cada pedido com UnicodeEncodeError.
+for _chave in ("groq_api_key", "llm_api_key", "pc_token"):
+    CFG[_chave] = CFG[_chave].strip()
+    if not CFG[_chave]:
+        sys.exit(f'Em {ARQUIVO_CONFIG}, "{_chave}" está vazio. Preencha como explica o README.')
+    if not CFG[_chave].isascii():
+        sys.exit(f'Em {ARQUIVO_CONFIG}, "{_chave}" tem um caractere que não pode ir numa chave: '
+                 "acento, aspas curvas (“ ”) ou espaço invisível. Apague o valor e cole de novo da fonte original.")
 HOST = CFG.get("host", "127.0.0.1")
 if not isinstance(HOST, str) or not HOST:
     sys.exit(f'Em {ARQUIVO_CONFIG}, "host" precisa ser um texto, como "127.0.0.1".')

@@ -316,6 +316,11 @@ class TestServidor(unittest.TestCase):
 
 @PRECISA_DEPENDENCIAS
 class TestServidorConfig(unittest.TestCase):
+    # porta 0: se uma checagem regredir, o servidor sobe numa porta livre em vez de disputar a 8000
+    VALIDO = {"groq_api_key": CHAVE_FALSA, "stt_model": "whisper-falso", "llm_base_url": "http://127.0.0.1:9",
+              "llm_api_key": CHAVE_FALSA, "llm_model": "qwen-falso", "pc_url": "http://127.0.0.1:9",
+              "pc_token": TOKEN, "porta": 0}
+
     def rodar_servidor(self, config=None) -> subprocess.CompletedProcess:
         """Roda `python servidor.py` com `config` (dict ou bytes crus) e devolve a saída."""
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -343,9 +348,6 @@ class TestServidorConfig(unittest.TestCase):
         self.assertNotIn("Traceback", saida.stderr)
 
     def test_valores_com_tipo_ou_formato_errado_encerram_com_mensagem(self):
-        base = {"groq_api_key": CHAVE_FALSA, "stt_model": "whisper-falso", "llm_base_url": "http://127.0.0.1:9",
-                "llm_api_key": CHAVE_FALSA, "llm_model": "qwen-falso", "pc_url": "http://127.0.0.1:9",
-                "pc_token": TOKEN, "porta": 0}  # porta 0: uma regressão não disputa a 8000
         casos = [
             ({"pc_url": None}, '"pc_url" precisa ser um texto entre aspas'),
             ({"llm_base_url": 8}, '"llm_base_url" precisa ser um texto entre aspas'),
@@ -357,10 +359,32 @@ class TestServidorConfig(unittest.TestCase):
         ]
         for mudanca, mensagem in casos:
             with self.subTest(mudanca=mudanca):
-                saida = self.rodar_servidor({**base, **mudanca})
+                saida = self.rodar_servidor({**self.VALIDO, **mudanca})
                 self.assertEqual(saida.returncode, 1)
                 self.assertIn(mensagem, saida.stderr)
                 self.assertNotIn("Traceback", saida.stderr)
+
+    def test_chave_com_caractere_invalido_ou_vazia_encerra_com_mensagem(self):
+        # Esses valores iam para o cabeçalho Authorization e davam UnicodeEncodeError em cada pedido.
+        casos = [
+            ({"pc_token": "\u201ctoken-colado\u201d"}, '"pc_token" tem um caractere que não pode ir numa chave'),
+            ({"llm_api_key": "gsk_abc\u200b"}, '"llm_api_key" tem um caractere que não pode ir numa chave'),
+            ({"groq_api_key": "chave-com-acentuação"}, '"groq_api_key" tem um caractere que não pode ir numa chave'),
+            ({"pc_token": "   "}, '"pc_token" está vazio'),
+        ]
+        for mudanca, mensagem in casos:
+            with self.subTest(mudanca=mudanca):
+                saida = self.rodar_servidor({**self.VALIDO, **mudanca})
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn(mensagem, saida.stderr)
+                self.assertNotIn("Traceback", saida.stderr)
+                self.assertNotIn("token-colado", saida.stderr, "a mensagem não deve repetir o segredo")
+
+    def test_espacos_em_volta_das_chaves_sao_removidos(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            servidor = carregar_servidor(Path(tmp) / "servidor", pc_token=f"  {TOKEN} ", llm_api_key=" chave\n")
+        self.assertEqual(servidor.PC_HEADERS, {"Authorization": f"Bearer {TOKEN}"})
+        self.assertEqual(servidor.LLM_HEADERS, {"Authorization": "Bearer chave"})
 
     def test_config_invalido_encerra_com_mensagem(self):
         com_acento = {"groq_api_key": "chave-música"}
