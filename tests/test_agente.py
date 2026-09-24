@@ -120,7 +120,7 @@ class TestAgenteHTTP(unittest.TestCase):
         # (ConnectionAbortedError, WinError 10053) em vez de entregar o 401 ou o 404.
         corpo = json.dumps({"programa": "programa de teste"}).encode("utf-8")
         for caminho, token, esperado in [("/abrir", "errado", b" 401 "), ("/programas", TOKEN, b" 404 ")]:
-            with self.subTest(caminho=caminho), \
+            with self.subTest(caminho=caminho), contextlib.redirect_stdout(io.StringIO()), \
                     socket.create_connection(("127.0.0.1", self.servidor.httpd.server_port), timeout=10) as s:
                 s.sendall(f"POST {caminho} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n"
                           f"Content-Length: {len(corpo)}\r\n\r\n".encode("utf-8"))
@@ -142,6 +142,18 @@ class TestAgenteHTTP(unittest.TestCase):
                           "Content-Length: 100\r\n\r\n{\"programa\": \"programa de".encode("utf-8"))
                 self.assertEqual(s.recv(1024), b"", "o agente deveria fechar a conexão parada")
         popen.assert_not_called()
+
+    def test_cabecalho_com_acento_recebe_401(self):
+        # compare_digest com str levantava TypeError e o agente fechava a conexão sem responder.
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida), \
+                socket.create_connection(("127.0.0.1", self.servidor.httpd.server_port), timeout=10) as s:
+            s.sendall(b"GET /programas HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer senha-\xe7\xe3o\r\n\r\n")
+            resposta = b""
+            while pedaco := s.recv(4096):
+                resposta += pedaco
+        self.assertIn(b" 401 ", resposta.split(b"\r\n", 1)[0])
+        self.assertIn("pedido recusado de 127.0.0.1: token inválido", saida.getvalue())
 
     def test_rota_desconhecida(self):
         self.assertEqual(self.pedir("GET", "/abrir")[0], 404)
@@ -171,11 +183,16 @@ class TestAgenteConfig(unittest.TestCase):
         self.assertIn("linha 1, coluna", saida.stderr)
         self.assertNotIn("Traceback", saida.stderr)
 
-    def test_token_de_exemplo_nao_inicia(self):
-        self.gravar_config((PASTA_AGENTE / "config_agente.example.json").read_text(encoding="utf-8"))
-        saida = rodar_agente(self.pasta)
-        self.assertEqual(saida.returncode, 1)
-        self.assertIn("Defina um token", saida.stderr)
+    def test_token_de_exemplo_vazio_ou_com_acento_nao_inicia(self):
+        exemplo = json.loads((PASTA_AGENTE / "config_agente.example.json").read_text(encoding="utf-8"))
+        # Com token vazio, um pedido sem cabeçalho Authorization seria aceito.
+        for token in (exemplo["token"], "", "   ", None, "senha-ção"):
+            with self.subTest(token=token):
+                self.gravar_config(json.dumps({**exemplo, "token": token}, ensure_ascii=False))
+                saida = rodar_agente(self.pasta)
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn("Defina um token próprio", saida.stderr)
+                self.assertNotIn("Traceback", saida.stderr)
 
     def test_aceita_bom_do_bloco_de_notas(self):
         config = {"token": TOKEN, "porta": 0, "programas": {}}
@@ -191,7 +208,7 @@ class TestAgenteConfig(unittest.TestCase):
         self.addCleanup(servidor.parar)
         cabecalhos = {"Authorization": f"Bearer {TOKEN}"}
         with SEM_PROXY.open(urllib.request.Request(servidor.url + "/programas", headers=cabecalhos),
-                         timeout=10) as r:
+                            timeout=10) as r:
             self.assertEqual(json.loads(r.read()), {"programas": ["bloco de notas", "vs code"]})
 
         with mock.patch.object(agente.subprocess, "Popen") as popen, \
@@ -200,7 +217,7 @@ class TestAgenteConfig(unittest.TestCase):
                 with self.subTest(pedido=pedido):
                     corpo = json.dumps({"programa": pedido}).encode("utf-8")
                     with SEM_PROXY.open(urllib.request.Request(servidor.url + "/abrir", data=corpo,
-                                                            headers=cabecalhos), timeout=10) as r:
+                                                               headers=cabecalhos), timeout=10) as r:
                         self.assertEqual(r.status, 200)
         self.assertEqual(popen.call_count, 3)
 

@@ -43,13 +43,17 @@ def normalizar(nome) -> str:
 
 CONFIG = carregar_config(BASE / "config_agente.json")
 
-TOKEN = CONFIG["token"]
+TOKEN = str(CONFIG["token"] or "").strip()
 PORTA = int(CONFIG.get("porta", 8765))
 PROGRAMAS = {normalizar(nome): comando  # nome -> comando (lista de strings)
              for nome, comando in CONFIG["programas"].items()}
 
-if TOKEN == "TROQUE-ESTE-TOKEN":
-    sys.exit("Defina um token próprio em config_agente.json antes de rodar.")
+# Token vazio deixaria qualquer um na rede abrir programas; com acento, o celular não consegue enviá-lo.
+if not TOKEN or TOKEN == "TROQUE-ESTE-TOKEN" or not TOKEN.isascii():
+    sys.exit(
+        "Defina um token próprio em config_agente.json antes de rodar, sem acentos.\n"
+        'Para gerar um: python -c "import secrets; print(secrets.token_urlsafe(24))"'
+    )
 
 
 def abrir_programa(nome: str) -> None:
@@ -91,7 +95,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _autorizado(self) -> bool:
         recebido = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-        return hmac.compare_digest(recebido, TOKEN)
+        # Em bytes: com str, compare_digest levanta TypeError se o cabeçalho tiver acento.
+        if hmac.compare_digest(recebido.encode("utf-8"), TOKEN.encode("utf-8")):
+            return True
+        print(f"[agente] pedido recusado de {self.client_address[0]}: token inválido")
+        return False
 
     def do_GET(self):
         if not self._autorizado():
