@@ -1,0 +1,21 @@
+# Configurações reais (têm chaves e tokens). Versione só os *.example.json.
+config_agente.json
+config_servidor.json
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Logs
+*.log
+logs/
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+desktop.ini
