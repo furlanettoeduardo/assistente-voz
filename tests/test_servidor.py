@@ -317,6 +317,23 @@ class TestServidor(unittest.TestCase):
         self.assertEqual((r.status_code, r.get_json()), (400, {"erro": "Digite um comando."}))
         self.assertEqual(self.llm.pedidos, [])
 
+    def test_erros_do_flask_saem_em_json_e_em_portugues(self):
+        casos = [("GET", "/nao-existe", 404, "Endereço não encontrado no servidor."),
+                 ("GET", "/texto", 405, "Esse endereço não aceita esse tipo de pedido.")]
+        for metodo, caminho, status, mensagem in casos:
+            with self.subTest(caminho=caminho):
+                r = self.cliente.open(caminho, method=metodo)
+                self.assertEqual((r.status_code, r.get_json()), (status, {"erro": mensagem}))
+
+    def test_erro_inesperado_sai_em_json_e_em_portugues(self):
+        with mock.patch.object(self.servidor, "conversar", side_effect=RuntimeError("falha de teste")), \
+                contextlib.redirect_stderr(io.StringIO()) as terminal:
+            r = self.enviar_texto("abre o programa de teste")
+        self.assertEqual(r.status_code, 500)
+        self.assertEqual(r.get_json(),
+                         {"erro": "Erro inesperado no servidor. Veja o terminal do Termux e tente de novo."})
+        self.assertIn("RuntimeError: falha de teste", terminal.getvalue())
+
     def test_pagina_inicial(self):
         r = self.cliente.get("/")
         self.addCleanup(r.close)

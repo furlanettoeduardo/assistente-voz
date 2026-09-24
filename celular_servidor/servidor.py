@@ -8,10 +8,12 @@ Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo
 import json
 import re
 import sys
+import traceback
 from pathlib import Path
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.exceptions import HTTPException
 
 BASE = Path(__file__).parent
 ARQUIVO_CONFIG = BASE / "config_servidor.json"
@@ -218,6 +220,26 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
 
 
 # ---------- Rotas ----------
+
+MENSAGENS_HTTP = {
+    404: "Endereço não encontrado no servidor.",
+    405: "Esse endereço não aceita esse tipo de pedido.",
+    413: "O pedido é grande demais.",
+}
+
+
+@app.errorhandler(HTTPException)
+def erro_http(e):
+    """Erros do Flask (404, 405...) em JSON e em português, no lugar da página HTML em inglês."""
+    return jsonify(erro=MENSAGENS_HTTP.get(e.code, f"O servidor respondeu com erro {e.code}.")), e.code
+
+
+@app.errorhandler(Exception)
+def erro_inesperado(e):
+    traceback.print_exception(e)
+    print("[servidor] erro inesperado ao atender o pedido; detalhes acima.", file=sys.stderr)
+    return jsonify(erro="Erro inesperado no servidor. Veja o terminal do Termux e tente de novo."), 500
+
 
 @app.get("/")
 def pagina():
