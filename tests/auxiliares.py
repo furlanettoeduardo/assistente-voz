@@ -142,12 +142,18 @@ class LLMFalso:
     """
 
     def __init__(self):
-        self.respostas: list[tuple[int, dict]] = []
-        self.pedidos: list[dict] = []
-        self.transcricao = ""
         self._trava = threading.Lock()
+        self.zerar()
         self._servidor = ServidorLocal(self._criar_handler())
         self.url = self._servidor.url
+
+    def zerar(self) -> None:
+        """Volta ao estado inicial entre um teste e outro."""
+        with self._trava:
+            self.respostas: list[tuple[int, dict]] = []
+            self.pedidos: list[dict] = []
+            self.transcricao = ""
+            self.status_transcricao = 200
 
     def programar(self, *corpos, status: int = 200) -> None:
         with self._trava:
@@ -178,6 +184,9 @@ class LLMFalso:
                 with falso._trava:
                     falso.pedidos.append(pedido)
                     if self.path == "/audio/transcriptions":
+                        if falso.status_transcricao != 200:
+                            return self._responder(falso.status_transcricao,
+                                                   {"error": {"message": "erro falso de transcrição"}})
                         return self._responder(200, {"text": falso.transcricao})
                     if self.path != "/chat/completions":
                         return self._responder(404, {"error": "rota não encontrada"})

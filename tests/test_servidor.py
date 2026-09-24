@@ -14,8 +14,8 @@ from pathlib import Path
 from unittest import mock
 
 from tests.auxiliares import (PASTA_SERVIDOR, LLMFalso, carregar_componente, comando_de_teste,
-                              copiar_componente, esperar_arquivo, iniciar_agente, resposta_ferramenta,
-                              resposta_texto, vigiar_popen)
+                              copiar_componente, esperar_arquivo, importar_copia, iniciar_agente,
+                              resposta_ferramenta, resposta_texto, vigiar_popen)
 
 try:
     import flask  # noqa: F401
@@ -111,7 +111,7 @@ class TestServidor(unittest.TestCase):
 
     def setUp(self):
         self.marcador.unlink(missing_ok=True)
-        self.llm.programar()  # zera respostas e pedidos do teste anterior
+        self.llm.zerar()
         self.cliente = self.servidor.app.test_client()
         self.popen = vigiar_popen(self, self.agente)
         pilha = contextlib.ExitStack()
@@ -256,9 +256,7 @@ class TestServidor(unittest.TestCase):
             resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA}),
             resposta_texto("Abri."),
         )
-        with mock.patch.object(self.servidor, "GROQ_URL", self.llm.url):
-            r = self.cliente.post("/voz", data=b"\x1a\x45\xdf\xa3" + b"\0" * 2000,
-                                  content_type="audio/webm;codecs=opus")
+        r = self.enviar_audio()
 
         self.assertEqual(r.status_code, 200, r.get_json())
         self.assertEqual(r.get_json()["transcricao"], "abre o programa de teste")
@@ -268,6 +266,38 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(transcricao["cabecalhos"]["Authorization"], f"Bearer {CHAVE_FALSA}")
         self.assertIn(b'filename="audio.webm"', transcricao["corpo"])
         self.assertIn(b'name="language"\r\n\r\npt', transcricao["corpo"])
+
+    def enviar_audio(self, content_type: str = "audio/webm;codecs=opus"):
+        with mock.patch.object(self.servidor, "GROQ_URL", self.llm.url):
+            return self.cliente.post("/voz", data=b"\x1a\x45\xdf\xa3" + b"\0" * 2000, content_type=content_type)
+
+    def test_erro_na_transcricao_vira_502(self):
+        self.llm.status_transcricao = 401
+        r = self.enviar_audio()
+
+        self.assertEqual(r.status_code, 502)
+        self.assertIn("Erro na API: 401", r.get_json()["erro"])
+        self.assertEqual(self.llm.pedidos_de_chat(), [])
+
+    def test_transcricao_vazia(self):
+        self.llm.transcricao = "   "
+        r = self.enviar_audio()
+
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json(), {"erro": "Não entendi nada no áudio. Tente de novo."})
+        self.assertEqual(self.llm.pedidos_de_chat(), [])
+
+    def test_formato_do_audio_vira_extensao_do_arquivo(self):
+        self.llm.transcricao = "oi"
+        casos = [("audio/mp4", "audio.m4a"), ("audio/ogg;codecs=opus", "audio.ogg"),
+                 ("audio/wav", "audio.wav"), ("application/octet-stream", "audio.webm")]
+        for content_type, arquivo in casos:
+            with self.subTest(content_type=content_type):
+                self.llm.programar(resposta_texto("Oi!"))
+                r = self.enviar_audio(content_type)
+
+                self.assertEqual(r.status_code, 200, r.get_json())
+                self.assertIn(f'filename="{arquivo}"'.encode("utf-8"), self.llm.pedidos[0]["corpo"])
 
     def test_audio_curto_demais(self):
         r = self.cliente.post("/voz", data=b"123", content_type="audio/webm")
@@ -287,10 +317,12 @@ class TestServidor(unittest.TestCase):
 @PRECISA_DEPENDENCIAS
 class TestServidorConfig(unittest.TestCase):
     def rodar_servidor(self, config=None) -> subprocess.CompletedProcess:
+        """Roda `python servidor.py` com `config` (dict ou bytes crus) e devolve a saída."""
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             pasta = copiar_componente(PASTA_SERVIDOR, Path(tmp) / "servidor")
             if config is not None:
-                (pasta / "config_servidor.json").write_text(json.dumps(config), encoding="utf-8")
+                conteudo = config if isinstance(config, bytes) else json.dumps(config).encode("utf-8")
+                (pasta / "config_servidor.json").write_bytes(conteudo)
             return subprocess.run(
                 [sys.executable, str(pasta / "servidor.py")], cwd=pasta, capture_output=True,
                 text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=60,
@@ -309,6 +341,28 @@ class TestServidorConfig(unittest.TestCase):
         self.assertIn("Faltam chaves em", saida.stderr)
         self.assertIn("llm_base_url, llm_api_key, llm_model, pc_url, pc_token", saida.stderr)
         self.assertNotIn("Traceback", saida.stderr)
+
+    def test_config_invalido_encerra_com_mensagem(self):
+        com_acento = {"groq_api_key": "chave-música"}
+        casos = [
+            (b'{"pc_url": "http://192.168.0.10:8765", }', "linha 1, coluna"),
+            (b"[]", "precisa ser um objeto JSON"),
+            (json.dumps(com_acento, ensure_ascii=False).encode("cp1252"), "não está em UTF-8"),  # ANSI
+            (json.dumps(com_acento, ensure_ascii=False).encode("utf-16"), "não está em UTF-8"),
+        ]
+        for conteudo, mensagem in casos:
+            with self.subTest(mensagem=mensagem):
+                saida = self.rodar_servidor(conteudo)
+                self.assertEqual(saida.returncode, 1)
+                self.assertIn(mensagem, saida.stderr)
+                self.assertNotIn("Traceback", saida.stderr)
+
+    def test_aceita_bom_do_bloco_de_notas(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            pasta = copiar_componente(PASTA_SERVIDOR, Path(tmp) / "servidor")
+            exemplo = (PASTA_SERVIDOR / "config_servidor.example.json").read_text(encoding="utf-8")
+            (pasta / "config_servidor.json").write_text(exemplo, encoding="utf-8-sig")
+            self.assertEqual(importar_copia(pasta, "servidor").CFG["porta"], 8000)
 
 
 class TestExemploDeConfigServidor(unittest.TestCase):
