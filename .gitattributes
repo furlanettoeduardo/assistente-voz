@@ -1,0 +1,4 @@
+# Fim de linha fixo, qualquer que seja o sistema de quem clona:
+# os scripts do Termux quebram com CRLF, e o cmd do Windows lê .bat com LF de forma errada.
+*.sh  text eol=lf
+*.bat text eol=crlf
