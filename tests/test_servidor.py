@@ -258,6 +258,34 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(len(r.get_json()["acoes"]), 1)
         self.assertIn("tool_use_failed", self.terminal.getvalue())
 
+    def test_texto_de_ferramenta_ignorada_na_ultima_rodada_nao_chega_ao_usuario(self):
+        # Um backend que ignora tool_choice="none" anuncia uma abertura que o servidor não executou.
+        self.llm.programar(
+            resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA}),
+            resposta_ferramenta("chamada-2", "abrir_programa", {"nome": "cmd"}),
+            resposta_ferramenta("chamada-3", "abrir_programa", {"nome": "navegador"},
+                                conteudo="Pronto, abri o navegador."),
+        )
+        r = self.enviar_texto("abre tudo")
+
+        self.assertEqual(r.get_json()["resposta"], f"Pronto, abri {PROGRAMA}.")
+        self.assertEqual([a["argumentos"]["nome"] for a in r.get_json()["acoes"]], [PROGRAMA, "cmd"])
+
+    def test_falha_do_llm_depois_de_abrir_nao_vira_erro(self):
+        # Mandar "tentar de novo" faria o programa abrir duas vezes.
+        chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA})
+        for status, corpo in ((500, {"error": {"message": "Internal Server Error"}}),
+                              (400, {"error": {"message": "Failed to call a function", "code": "tool_use_failed"}}),
+                              (200, {"sem": "choices"})):
+            with self.subTest(status=status, corpo=corpo):
+                self.llm.programar_com_status((200, chamada), (status, corpo))
+                r = self.enviar_texto("abre o programa de teste")
+
+                self.assertEqual(r.status_code, 200)
+                self.assertEqual(r.get_json()["resposta"], f"Pronto, abri {PROGRAMA}.")
+                self.assertEqual(len(r.get_json()["acoes"]), 1)
+        self.assertIn("falhou depois das ações", self.terminal.getvalue())
+
     def test_nada_aberto_e_sem_texto_final(self):
         chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": "cmd"})
         self.llm.programar(chamada, chamada, chamada)

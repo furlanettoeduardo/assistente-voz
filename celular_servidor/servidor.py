@@ -222,20 +222,28 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
             # seria executada sem que o resultado voltasse para ele.
             payload.update(tools=ferramentas, tool_choice="none" if ultima else "auto")
 
-        r = requests.post(f"{LLM_URL}/chat/completions", headers=LLM_HEADERS,
-                          json=payload, timeout=60)
-        if ultima and r.status_code == 400:
-            # Alguns modelos insistem na ferramenta mesmo com tool_choice="none", e o Groq responde 400.
-            print(f"[servidor] o LLM recusou a última rodada (detalhe técnico: {r.text[:500]})", file=sys.stderr)
+        try:
+            r = requests.post(f"{LLM_URL}/chat/completions", headers=LLM_HEADERS,
+                              json=payload, timeout=60)
+            r.raise_for_status()
+            msg = r.json()["choices"][0]["message"]
+        except (requests.RequestException, KeyError, IndexError, TypeError) as e:
+            if not acoes:
+                raise
+            # Algo já foi feito (um programa pode ter aberto): contar o que aconteceu é melhor do que
+            # mandar tentar de novo e abrir outra vez. Inclui o 400 do Groq quando o modelo insiste na
+            # ferramenta mesmo com tool_choice="none".
+            detalhe = e.response.text[:500] if getattr(e, "response", None) is not None else repr(e)
+            print(f"[servidor] a API do LLM falhou depois das ações (detalhe técnico: {detalhe})", file=sys.stderr)
             return resumir(acoes), acoes
-        r.raise_for_status()
-        msg = r.json()["choices"][0]["message"]
         chamadas = msg.get("tool_calls") or []
 
         if not chamadas:
             return limpar(msg.get("content")), acoes
-        if ultima:  # backend que ignora tool_choice="none" (o Ollama, por exemplo): não executa nada
-            return limpar(msg.get("content")) or resumir(acoes), acoes
+        if ultima:
+            # Backend que ignora tool_choice="none" (o Ollama, por exemplo): não executa nada, e o texto
+            # que acompanha a chamada ("Pronto, abri o navegador.") não vale, porque nada foi aberto.
+            return resumir(acoes), acoes
 
         mensagens.append({"role": "assistant", "content": msg.get("content") or "",
                           "tool_calls": chamadas})
