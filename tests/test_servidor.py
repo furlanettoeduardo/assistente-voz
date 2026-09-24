@@ -41,6 +41,7 @@ def carregar_servidor(destino: Path, **config):
     servidor = carregar_componente(PASTA_SERVIDOR, "servidor", "config_servidor.json",
                                    {**base, **config}, destino)
     servidor.app.testing = True
+    servidor.GROQ_URL = "http://127.0.0.1:9"  # nenhum teste chega ao Groq real por esquecimento
     return servidor
 
 
