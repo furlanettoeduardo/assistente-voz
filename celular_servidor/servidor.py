@@ -202,6 +202,15 @@ def ler_argumentos(bruto) -> dict:
     return bruto if isinstance(bruto, dict) else {}
 
 
+def chamadas_validas(msg: dict) -> list[dict]:
+    """tool_calls que dá para executar e responder: com id e com o nome da função."""
+    brutas = msg.get("tool_calls")
+    if not isinstance(brutas, list):
+        return []
+    return [c for c in brutas if isinstance(c, dict) and c.get("id")
+            and isinstance(c.get("function"), dict) and c["function"].get("name")]
+
+
 def executar_ferramenta(nome: str, args: dict) -> dict:
     if nome == "abrir_programa":
         try:
@@ -220,7 +229,7 @@ def executar_ferramenta(nome: str, args: dict) -> dict:
 def limpar(texto: str) -> str:
     """Remove o raciocínio <think>...</think> que alguns modelos Qwen devolvem."""
     # Um <think> sem fechamento (resposta cortada) vai até o fim do texto.
-    texto = re.sub(r"<think>.*?(?:</think>|$)", "", texto or "", flags=re.DOTALL)
+    texto = re.sub(r"<think>.*?(?:</think>|$)", "", texto if isinstance(texto, str) else "", flags=re.DOTALL)
     # Quando o template do modelo já abre o <think>, só o fechamento aparece: descarta até ele.
     texto = re.sub(r"^.*?</think>", "", texto, flags=re.DOTALL)
     return texto.strip()
@@ -260,6 +269,8 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
                               json=payload, timeout=60)
             r.raise_for_status()
             msg = r.json()["choices"][0]["message"]
+            if not isinstance(msg, dict):
+                raise TypeError(f"message não é um objeto: {msg!r}")
         except (requests.RequestException, KeyError, IndexError, TypeError) as e:
             if not acoes:
                 raise
@@ -269,7 +280,7 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
             detalhe = e.response.text[:500] if getattr(e, "response", None) is not None else repr(e)
             print(f"[servidor] a API do LLM falhou depois das ações (detalhe técnico: {detalhe})", file=sys.stderr)
             return resumir(acoes), acoes
-        chamadas = msg.get("tool_calls") or []
+        chamadas = chamadas_validas(msg)
 
         if not chamadas:
             return limpar(msg.get("content")), acoes

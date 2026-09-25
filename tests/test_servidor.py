@@ -287,6 +287,25 @@ class TestServidor(unittest.TestCase):
                 self.assertEqual(len(r.get_json()["acoes"]), 1)
         self.assertIn("falhou depois das ações", self.terminal.getvalue())
 
+    def test_resposta_malformada_do_llm(self):
+        chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": PROGRAMA})
+        # Depois de abrir o programa, um message inválido não vira "tente de novo".
+        for message in (None, "texto solto", ["lista"]):
+            with self.subTest(message=message):
+                self.llm.programar(chamada, {"choices": [{"message": message}]})
+                r = self.enviar_texto("abre o programa de teste")
+                self.assertEqual((r.status_code, r.get_json()["resposta"]), (200, f"Pronto, abri {PROGRAMA}."))
+        # Chamadas sem id ou sem nome não são executadas; content que não é texto vira resposta vazia.
+        self.popen.reset_mock()
+        sem_id = resposta_ferramenta(None, "abrir_programa", {"nome": PROGRAMA})
+        sem_id["choices"][0]["message"]["content"] = ["não é texto"]
+        sem_id["choices"][0]["message"]["tool_calls"].append({"id": "x", "type": "function", "function": {}})
+        self.llm.programar(sem_id)
+        r = self.enviar_texto("abre o programa de teste")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["acoes"], [])
+        self.popen.assert_not_called()
+
     def test_nada_aberto_e_sem_texto_final(self):
         chamada = resposta_ferramenta("chamada-1", "abrir_programa", {"nome": "cmd"})
         self.llm.programar(chamada, chamada, chamada)
