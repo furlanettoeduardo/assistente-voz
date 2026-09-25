@@ -1,28 +1,44 @@
 # Assistente de voz caseira: fase 0.1a (abrir programas)
 
-Você segura um botão no celular, fala "abre a calculadora" e o programa abre no PC.
-
-```
-Celular (Termux)                                    PC
-  página com o botão de falar                         pc_agente/agente.py
-  celular_servidor/servidor.py  ── rede local ──▶     abre só programas da lista
-     │
-     └─▶ Groq: transcrição (Whisper) + LLM Qwen com ferramentas
-```
+Você segura o botão de falar numa página, fala "abre a calculadora" e o programa abre no PC. Por enquanto, tudo roda no mesmo notebook.
 
 O projeto tem duas partes:
 
-- `pc_agente/`: roda no computador e abre programas quando o celular pede. Usa só a biblioteca padrão do Python.
-- `celular_servidor/`: roda no celular (Termux). Mostra a página com o botão de falar, transcreve o áudio no Groq, consulta o LLM e manda o PC agir.
+- `celular_servidor/`: o servidor, que é o cérebro. Mostra a página com o botão de falar, transcreve o áudio no Groq, consulta o LLM e manda o PC agir. O nome da pasta vem da primeira versão: hoje ele roda no notebook, também roda num celular com Termux e, no futuro, vai rodar num Raspberry Pi.
+- `pc_agente/`: roda no computador e abre programas quando o servidor pede. Usa só a biblioteca padrão do Python.
 
-O LLM nunca executa comandos: ele só escolhe um nome da lista de programas do agente, que roda o comando cadastrado sem shell, e todo pedido ao PC exige token. O plano das próximas fases está em [roadmap.md](roadmap.md).
+O LLM nunca executa comandos: ele só escolhe um nome da lista de programas do agente, que roda o comando cadastrado sem shell, e todo pedido ao PC exige token.
+
+## Arquitetura
+
+### Protótipo atual: modo notebook (o padrão para testar agora)
+
+O notebook faz os dois papéis: roda o servidor e o agente, e a página abre em `http://localhost:8000` no próprio notebook. No `config_servidor.json`, o `pc_url` fica em `http://127.0.0.1:8765`. Os passos estão em [Como rodar no notebook](#como-rodar-no-notebook-modo-padrão).
+
+```
+Notebook
+  página em http://localhost:8000 (botão de falar)
+  celular_servidor/servidor.py ──▶ Groq: transcrição (Whisper) + LLM Qwen com ferramentas
+            │
+            └──▶ pc_agente/agente.py em http://127.0.0.1:8765: abre só programas da lista
+```
+
+Rodar o servidor num celular Android com Termux continua possível, como alternativa opcional: veja [Rodando no celular](#rodando-no-celular-opcional).
+
+### Visão final
+
+- **Cérebro:** um Raspberry Pi sempre ligado em casa, rodando o mesmo `servidor.py`.
+- **Satélites:** um ESP32-S3 com PSRAM por cômodo, com microfone, alto-falante e a palavra de ativação "hey Jarvis" detectada no próprio chip (microWakeWord). Eles falam com o cérebro pelo endpoint `/voz`.
+- **PC:** apenas o agente, instalado para rodar em segundo plano.
+
+O cérebro, os satélites, o agente e a lâmpada ficam na rede de casa; só a transcrição e o LLM saem para a internet, no Groq. Não há servidor na nuvem: a lâmpada, o agente e o Wake-on-LAN só existem na rede local, e um servidor exposto na internet, capaz de abrir programas no PC, seria um risco de segurança permanente. O acesso de fora de casa, quando existir, será via Tailscale. As decisões e as próximas fases estão no [roadmap.md](roadmap.md).
 
 ## Requisitos
 
-- Python 3.11 ou mais novo no PC e no celular. No Windows, instale pelo python.org: o instalador principal (Python install manager) já deixa os comandos `python` e `py` disponíveis; se usar o instalador tradicional, marque **Add python.exe to PATH**.
-- PC com Windows ou Linux na mesma rede Wi-Fi do celular.
-- Celular Android com Termux instalado pelo **F-Droid** (a versão da Play Store é experimental e tem recursos faltando).
+- Python 3.11 ou mais novo no notebook (e no celular, se usar o modo Termux). No Windows, instale pelo python.org: o instalador principal (Python install manager) já deixa os comandos `python` e `py` disponíveis; se usar o instalador tradicional, marque **Add python.exe to PATH**.
+- Notebook ou PC com Windows ou Linux.
 - Uma chave gratuita da API do Groq.
+- Só para o modo celular (opcional): um celular Android na mesma rede Wi-Fi do PC, com o Termux instalado pelo **F-Droid** (a versão da Play Store é experimental e tem recursos faltando).
 
 ## Instalação
 
@@ -83,7 +99,7 @@ Salve os arquivos em UTF-8 (o padrão do Bloco de Notas e do VS Code). Se um con
 | `porta` | Porta em que o agente escuta. Padrão: `8765`. |
 | `programas` | Nome falado → comando que o PC executa, como lista de strings. Precisa ter pelo menos um programa. Maiúsculas e espaços extras no nome não importam. |
 
-1. [Descubra o IP do PC](#1-descubra-o-ip-do-pc) e reserve-o no roteador (reserva de DHCP), para ele não mudar. Por exemplo, `192.168.0.10`.
+1. Só se o servidor for rodar em outro aparelho (modo celular): [descubra o IP do PC](#1-descubra-o-ip-do-pc) e reserve-o no roteador (reserva de DHCP), para ele não mudar. Por exemplo, `192.168.0.10`. No modo notebook, pule este passo.
 2. Gere um token e cole em `token`:
    ```
    python -c "import secrets; print(secrets.token_urlsafe(24))"
@@ -103,15 +119,17 @@ No Windows, `["cmd", "/c", "start", "", "nome"]` funciona para a maioria dos pro
 | `llm_base_url` | Endereço da API do LLM, compatível com OpenAI. No modelo: Groq. |
 | `llm_api_key` | Chave do LLM. No Groq, é a mesma de `groq_api_key`. |
 | `llm_model` | Nome exato do modelo Qwen, como aparece em [console.groq.com/docs/models](https://console.groq.com/docs/models). Precisa suportar tool calling. |
-| `pc_url` | Endereço do agente, com `http://`, IP e porta, por exemplo `http://192.168.0.10:8765`. |
+| `pc_url` | Endereço do agente, com `http://`, IP e porta. No modo notebook, `http://127.0.0.1:8765`; com o servidor em outro aparelho, o IP do PC na rede, como `http://192.168.0.10:8765`. |
 | `pc_token` | O mesmo valor de `token` do agente. |
 | `host` e `porta` | Onde o servidor escuta. Padrão: `127.0.0.1:8000`, só o próprio aparelho acessa. |
 
 Em setembro de 2026, o Qwen disponível no Groq é o `qwen/qwen3.8-27b`, na categoria Preview. Modelos Preview trocam de nome ou saem do ar com pouco aviso, então confira a lista antes de preencher.
 
-Para usar Ollama no lugar do Groq, troque `llm_base_url` para `http://IP-DO-PC:11434/v1`, `llm_api_key` para `ollama` e `llm_model` para o nome de um modelo com suporte a ferramentas. Por padrão o Ollama só aceita conexões do próprio PC: defina a variável de ambiente `OLLAMA_HOST=0.0.0.0`, reinicie o Ollama e libere a porta 11434 no firewall, só em redes privadas. A transcrição continua no Groq.
+Para usar Ollama no lugar do Groq, troque `llm_api_key` para `ollama`, `llm_model` para o nome de um modelo com suporte a ferramentas e `llm_base_url` para o endereço do Ollama. No modo notebook, com o Ollama na mesma máquina, use `http://127.0.0.1:11434/v1`; não precisa mexer em mais nada. Com o servidor em outro aparelho, use `http://IP-DO-PC:11434/v1`: como por padrão o Ollama só aceita conexões do próprio PC, defina a variável de ambiente `OLLAMA_HOST=0.0.0.0`, reinicie o Ollama e libere a porta 11434 no firewall, só em redes privadas. A transcrição continua no Groq.
 
-## Como rodar no PC
+## Como rodar no notebook (modo padrão)
+
+Este é o modo para testar agora: servidor e agente no mesmo notebook.
 
 ### 1. Agente
 
@@ -124,13 +142,13 @@ cd pc_agente
 python agente.py
 ```
 
-Na primeira vez, o firewall do Windows pergunta se libera o Python: permita **apenas em redes privadas**, e confira se a sua rede Wi-Fi está como privada (veja [Rodando no celular](#2-deixe-a-rede-wi-fi-do-windows-como-privada)).
+Na primeira vez, o firewall do Windows pergunta se libera o Python: permita **apenas em redes privadas**. No modo notebook o servidor fala com o agente por `127.0.0.1`, dentro da própria máquina, então o perfil da rede não atrapalha. Ele só importa quando outro aparelho precisa alcançar o agente, como o celular no modo opcional (veja [como deixar a rede como privada](#2-deixe-a-rede-wi-fi-do-windows-como-privada)).
 
 Depois de mudar o `config_agente.json`, feche o agente e abra de novo.
 
-### 2. Servidor no próprio PC, para testar
+### 2. Servidor no mesmo notebook
 
-Antes de ir para o celular, rode tudo no computador para achar erros mais rápido. Com o ambiente virtual ativado e `"pc_url": "http://127.0.0.1:8765"`:
+No `config_servidor.json`, troque o `pc_url` do exemplo por `"pc_url": "http://127.0.0.1:8765"`, para o servidor falar com o agente na própria máquina. Depois, com o ambiente virtual ativado:
 
 ```
 cd celular_servidor
@@ -138,11 +156,33 @@ python verificar.py
 python servidor.py
 ```
 
-O `verificar.py` confere tudo o que o servidor precisa (veja [Diagnóstico](#diagnóstico)). Depois, abra `http://localhost:8000` no navegador do PC. Comece pelo campo de texto ("abre a calculadora"); depois teste o botão de voz.
+O `verificar.py` confere tudo o que o servidor precisa (veja [Diagnóstico](#diagnóstico)). Depois, abra `http://localhost:8000` no navegador do notebook. Comece pelo campo de texto ("abre a calculadora"); depois teste o botão de voz.
 
-## Rodando no celular
+## Diagnóstico
 
-O servidor roda no Termux e fala com o agente do PC pela rede Wi-Fi. Deixe o agente aberto no PC antes de começar.
+Para rodar só o diagnóstico, a qualquer hora:
+
+```
+cd celular_servidor
+python verificar.py
+```
+
+Ele confere, em ordem, e explica em português o que falhou e como resolver:
+
+1. Python 3.11 ou mais novo, com Flask e requests instalados;
+2. `config_servidor.json` existe, é válido e não tem mais valores de exemplo;
+3. a chave do Groq funciona e o modelo de transcrição existe;
+4. o modelo em `llm_model` existe na API configurada;
+5. o agente do PC responde em `pc_url`;
+6. o agente aceita o `pc_token`.
+
+Para testar as chaves, ele só pede a lista de modelos da API: não grava áudio nem gasta tokens. Ele termina com código 0 quando está tudo certo, 1 quando há problemas mas o servidor consegue subir, 2 quando o servidor nem sobe, 3 quando o próprio diagnóstico quebra e 130 quando é interrompido com Ctrl+C. As dicas mostram o caminho completo dos arquivos, então funcionam de qualquer pasta.
+
+Algumas mensagens do diagnóstico e do servidor ainda falam em celular e Termux, da época em que o servidor rodava no celular. No modo notebook, leia "celular" como o aparelho que roda o servidor.
+
+## Rodando no celular (opcional)
+
+Alternativa ao modo notebook: o servidor roda no Termux e fala com o agente do PC pela rede Wi-Fi. Deixe o agente aberto no PC antes de começar.
 
 ### 1. Descubra o IP do PC
 
@@ -213,26 +253,6 @@ Para parar, aperte Ctrl+C no Termux; o wake lock é solto junto.
 
 Nas configurações do Android, desative a otimização de bateria para o Termux. No Android 12 ou mais novo, o sistema ainda pode encerrar o servidor (`[Process completed (signal 9)]`); veja as soluções na [discussão do Termux sobre o "phantom process killer"](https://github.com/termux/termux-app/issues/2366).
 
-### Diagnóstico
-
-Para rodar só o diagnóstico, a qualquer hora:
-
-```
-cd celular_servidor
-python verificar.py
-```
-
-Ele confere, em ordem, e explica em português o que falhou e como resolver:
-
-1. Python 3.11 ou mais novo, com Flask e requests instalados;
-2. `config_servidor.json` existe, é válido e não tem mais valores de exemplo;
-3. a chave do Groq funciona e o modelo de transcrição existe;
-4. o modelo em `llm_model` existe na API configurada;
-5. o agente do PC responde em `pc_url`;
-6. o agente aceita o `pc_token`.
-
-Para testar as chaves, ele só pede a lista de modelos da API: não grava áudio nem gasta tokens. Ele termina com código 0 quando está tudo certo, 1 quando há problemas mas o servidor consegue subir, 2 quando o servidor nem sobe, 3 quando o próprio diagnóstico quebra e 130 quando é interrompido com Ctrl+C. As dicas mostram o caminho completo dos arquivos, então funcionam de qualquer pasta.
-
 ### Atualizar o celular
 
 ```
@@ -279,13 +299,13 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **"... não está em UTF-8"**: o arquivo foi salvo em ANSI ou UTF-16. Abra no Bloco de Notas, vá em Salvar como e escolha a codificação UTF-8.
 - **"Defina um token próprio"**: o `token` do agente está vazio, com acento ou ainda com o valor de exemplo. Gere um novo com o comando da [configuração do agente](#agente-do-pc-pc_agenteconfig_agentejson).
 
-### Celular e PC
+### Servidor e agente
 
 - **A assistente diz que o computador está desligado ou inacessível** (o texto exato varia, porque é o LLM que escreve): o servidor não conseguiu a lista de programas. O terminal do servidor diz o motivo, e o console do agente no PC ajuda:
   - se o agente mostra `[agente] pedido recusado de ...: token inválido`, a rede está certa e o `pc_token` do servidor está diferente do `token` do agente;
-  - se o agente não mostra nada, o pedido nem chegou ao PC. Confira se o agente está aberto, se o IP em `pc_url` é o do `ipconfig`, se a [rede do Windows está como privada](#2-deixe-a-rede-wi-fi-do-windows-como-privada) e se o firewall liberou o Python. No Linux com firewall ativo, libere a porta: `sudo ufw allow 8765/tcp`.
+  - se o agente não mostra nada, o pedido nem chegou até ele. No modo notebook, confira se o agente está aberto e se o `pc_url` é `http://127.0.0.1:8765`. Com o servidor em outro aparelho, confira também se o IP em `pc_url` é o do `ipconfig`, se a [rede do Windows está como privada](#2-deixe-a-rede-wi-fi-do-windows-como-privada) e se o firewall liberou o Python. No Linux com firewall ativo, libere a porta: `sudo ufw allow 8765/tcp`.
 
-  Para testar só a rede, abra `http://IP-DO-PC:8765/programas` no Chrome do celular. A resposta `{"erro": "token inválido"}` prova que a rede chega até o agente (o navegador não manda token).
+  Para testar só a conexão, abra no navegador `http://127.0.0.1:8765/programas` (modo notebook) ou `http://IP-DO-PC:8765/programas` (no Chrome do celular). A resposta `{"erro": "token inválido"}` prova que o pedido chega até o agente (o navegador não manda token).
 - **Cancelei o aviso do firewall do Windows**: procure "Permitir um aplicativo pelo Firewall do Windows" no menu Iniciar e marque o Python na coluna Privada.
 - **A página diz "Abriu", mas nada abriu no PC**: com `cmd /c start`, "Abriu" só quer dizer que o comando foi disparado. Rode o mesmo comando no terminal do PC (por exemplo `cmd /c start "" chrome`) para ver o erro.
 - **"Não abriu: nome (programa 'nome' não está na lista)"**: o LLM escolheu um nome que não existe em `programas`. Fale o nome como está no config.
@@ -302,17 +322,17 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **"O modelo se confundiu ao usar a ferramenta"**: repita o pedido; se acontecer sempre, troque de modelo.
 - **"... avisou que o limite de uso acabou por enquanto"**: estourou o limite do plano gratuito. Espere um pouco e tente de novo.
 - **"... achou o pedido grande demais"**: fale um comando mais curto.
-- **"Sem conexão com a API ..."**: o celular está sem internet. Com Ollama, confira se ele está rodando com `OLLAMA_HOST=0.0.0.0` e se o firewall liberou a porta 11434.
+- **"Sem conexão com a API ..."**: o aparelho que roda o servidor está sem internet (a mensagem fala em celular; no modo notebook, é o notebook). Com Ollama, confira se ele está aberto; com o servidor em outro aparelho, confira também `OLLAMA_HOST=0.0.0.0` e se o firewall liberou a porta 11434.
 - **A transcrição mostra frases que você não disse** (por exemplo "Legendas pela comunidade Amara.org"): o Whisper inventa texto quando o áudio sai quase mudo. Segure o botão durante toda a fala e fale mais perto do microfone.
 - **Aparece texto de raciocínio na resposta**: o servidor remove os blocos `<think>`. Se ainda aparecer, o backend usa outro formato; com Ollama, atualize para uma versão recente.
 
-### Celular e instalação
+### Página, Termux e instalação
 
-- **"Sem conexão com o servidor do celular"** na página: o servidor parou no Termux. Veja o erro no Termux e rode `bash scripts/termux-iniciar.sh` de novo.
+- **"Sem conexão com o servidor do celular"** na página: o servidor parou (a mensagem fala em celular, mas vale para qualquer aparelho). No modo notebook, veja o erro no terminal onde você rodou `python servidor.py` e rode de novo; no celular, rode `bash scripts/termux-iniciar.sh` de novo.
 - **"A instalação parou com erro"**: veja a mensagem logo acima (normalmente é falta de internet) e rode `bash scripts/termux-instalar.sh` de novo.
 - **"Endereço não encontrado no servidor"** ao abrir a página: a pasta `static` com o `index.html` precisa estar dentro de `celular_servidor`. Com `git clone`, ela já vem.
-- **Microfone não liga**: abra a página como `http://localhost:8000` no próprio celular que roda o servidor; o Chrome só libera o microfone em `localhost` ou HTTPS. Na primeira vez, o Android também pede a permissão de microfone para o Chrome.
-- **O servidor para com a tela apagada**: use o `termux-iniciar.sh`, que liga o wake lock, e desative a otimização de bateria do Termux.
+- **Microfone não liga**: abra a página como `http://localhost:8000` no próprio aparelho que roda o servidor (o notebook, no modo padrão); o navegador só libera o microfone em `localhost` ou HTTPS. No celular, na primeira vez o Android também pede a permissão de microfone para o Chrome.
+- **No celular, o servidor para com a tela apagada**: use o `termux-iniciar.sh`, que liga o wake lock, e desative a otimização de bateria do Termux.
 - **"Não consegui escutar em 127.0.0.1:8000"**: a mensagem diz o motivo. "Outro servidor já usa essa porta": feche a outra sessão do Termux ou troque `porta` no config. "Não é um endereço deste aparelho": deixe `host` como `127.0.0.1`. "O sistema não deixou usar essa porta": use uma porta acima de 1024; testando no PC com Windows, a porta pode estar reservada pelo Hyper-V ou pelo WSL, então troque para outra, como 8001.
 - **"O servidor já está rodando em outra sessão do Termux"**: use a sessão que já está aberta ou pare o servidor dela com Ctrl+C antes de rodar o `termux-iniciar.sh` de novo.
 - **"Não encontrei o Python. Rode antes: bash scripts/termux-instalar.sh"** ou **"Falta a biblioteca ..."**: a instalação não foi feita (ou, no PC, o `.venv` não está ativado). Rode o que a mensagem pede.
