@@ -35,6 +35,7 @@ MOTIVOS_JSON = (
     ("Illegal trailing comma", "vírgula sobrando antes do } ou do ]"),
     ("Expecting value", "falta um valor, ou tem uma vírgula sobrando"),
     ("Invalid \\escape", "barra invertida simples dentro de um texto"),
+    ("Invalid \\uXXXX escape", "barra invertida simples dentro de um texto"),  # caminhos como D:\utilitarios
     ("Unterminated string", "aspas abertas que não foram fechadas"),
     ("Invalid control character", "quebra de linha ou tabulação dentro de um texto entre aspas"),
     ("Extra data", "tem texto sobrando depois do último }"),

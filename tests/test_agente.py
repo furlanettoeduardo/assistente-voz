@@ -196,6 +196,7 @@ class TestAgenteConfig(unittest.TestCase):
     def test_json_quebrado_encerra_com_linha_coluna_e_motivo_em_portugues(self):
         casos = [
             ('{"token": "C:\\Pasta"}', "barra invertida simples dentro de um texto"),
+            ('{"token": "D:\\utilitarios"}', "barra invertida simples dentro de um texto"),  # \u tem outra mensagem
             ('{"token": "abc" "porta": 1}', "falta uma vírgula entre dois itens"),
             ('{"token": "abc",}', "vírgula sobrando antes do }"),  # a mensagem do json mudou no 3.13
             ('{"token": "abc', "aspas abertas que não foram fechadas"),
