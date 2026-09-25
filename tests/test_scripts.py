@@ -61,6 +61,11 @@ class TestScriptsDoTermux(unittest.TestCase):
         self.registro = Path(tmp.name) / "chamadas.log"
         self.tmpdir = Path(tmp.name) / "tmp"  # o $TMPDIR do Termux, onde fica a trava do termux-iniciar.sh
         self.tmpdir.mkdir()
+        # Só os utilitários que os scripts usam: /usr/bin inteiro pode ter um python de verdade (Fedora, Arch).
+        self.utilitarios = Path(tmp.name) / "utilitarios"
+        self.utilitarios.mkdir()
+        for programa in ("dirname", "cat", "rm", "cp"):
+            (self.utilitarios / programa).symlink_to(shutil.which(programa))
 
     def programa_falso(self, nome: str, corpo: str = "") -> None:
         """Cria um executável que anota a chamada em chamadas.log e roda `corpo`."""
@@ -69,7 +74,7 @@ class TestScriptsDoTermux(unittest.TestCase):
         caminho.chmod(caminho.stat().st_mode | stat.S_IXUSR)
 
     def rodar(self, script: str, **ambiente) -> subprocess.CompletedProcess:
-        caminho = f"{self.falsos}:/usr/bin:/bin"  # sem o python e o pkg de verdade
+        caminho = f"{self.falsos}:{self.utilitarios}"  # sem o python e o pkg de verdade
         return subprocess.run([BASH, str(self.raiz / "scripts" / script)], cwd=self.raiz, capture_output=True,
                               text=True, encoding="utf-8", timeout=60,
                               env={"PATH": caminho, "TMPDIR": str(self.tmpdir), **ambiente})

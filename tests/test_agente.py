@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -327,9 +328,17 @@ class TestAgenteConfig(unittest.TestCase):
         self.gravar_config(json.dumps({"token": TOKEN, "porta": 0, "programas": {"calculadora": ["calc.exe"]}}))
         processo = subprocess.Popen([sys.executable, "-u", str(self.pasta / "agente.py")], cwd=self.pasta,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
-        primeira = processo.stdout.readline()
-        while "para parar" not in processo.stdout.readline():
-            pass
+        vigia = threading.Timer(15, processo.kill)  # se o agente travar calado, o readline abaixo não prende a suíte
+        vigia.start()
+        self.addCleanup(vigia.cancel)
+        self.addCleanup(lambda: processo.poll() is None and processo.kill())
+        linhas = []
+        while not linhas or "para parar" not in linhas[-1]:
+            linha = processo.stdout.readline()
+            if not linha:
+                self.fail(f"o agente parou antes de ficar pronto: {''.join(linhas)}")
+            linhas.append(linha)
+        primeira = linhas[0]
         time.sleep(0.3)  # deixa o agente entrar no serve_forever
         processo.send_signal(signal.SIGINT)
         resto, _ = processo.communicate(timeout=15)
