@@ -99,12 +99,14 @@ Mudanças previstas no contrato:
 
 ### v0.1b: lâmpada Elgin (Tuya/tinytuya)
 
-- [ ] Parear a lâmpada no app Smart Life (confirma que é Tuya)
-- [ ] Criar o projeto na plataforma de desenvolvedor da Tuya e vincular a conta
-- [ ] Obter ID, IP e local key com `python -m tinytuya wizard`
+- [x] Parear a lâmpada no app Smart Life (confirma que é Tuya)
+- [x] Criar o projeto na plataforma de desenvolvedor da Tuya e vincular a conta
+- [x] Obter ID e local key com `python -m tinytuya wizard`
+- [ ] Obter IP e versão com `python -m tinytuya scan`, com a lâmpada ligada e o PC na mesma rede
 - [ ] Reservar IP fixo para a lâmpada no roteador
-- [ ] Adicionar a ferramenta `controlar_lampada(ligar, brilho, cor)` ao servidor
-- [ ] Mensagem clara em português quando a lâmpada estiver offline
+- [x] Adicionar a ferramenta `controlar_lampada(ligar, brilho, cor)` ao servidor
+- [x] Mensagem clara em português quando a lâmpada estiver offline
+- [ ] Testar por voz com a lâmpada real ("acende a luz", "deixa a luz azul") e conferir se o branco quente e o frio saem certos
 
 Com a v0.1a e a v0.1b prontas, o MVP está completo.
 
