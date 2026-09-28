@@ -10,5 +10,12 @@
   "pc_token": "O-MESMO-TOKEN-DO-AGENTE",
 
   "host": "127.0.0.1",
-  "porta": 8000
+  "porta": 8000,
+
+  "lampada": {
+    "id": "ID-DA-LAMPADA",
+    "chave_local": "CHAVE-LOCAL-DA-LAMPADA",
+    "ip": "IP-DA-LAMPADA",
+    "versao": "VERSAO-DO-SCAN"
+  }
 }

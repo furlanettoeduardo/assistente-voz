@@ -4,6 +4,7 @@ roda de verdade em 127.0.0.1, então o fluxo completo passa por HTTP sem chamar 
 """
 import contextlib
 import errno
+import importlib.util
 import io
 import json
 import os
@@ -36,6 +37,27 @@ PRECISA_DEPENDENCIAS = unittest.skipUnless(
 TOKEN = "token-de-teste"
 CHAVE_FALSA = "chave-falsa"
 PROGRAMA = "programa de teste"
+
+
+class LampadaDeMentira:
+    """Imita lampada.Lampada: guarda os pedidos e responde com o que foi feito, ou com o erro dado."""
+
+    def __init__(self, erro=None, dps=None):
+        self.erro, self.dps, self.pedidos = erro, dps or {"20": True, "21": "white"}, []
+        self.config = {"id": "eb1234567890abcdef12", "ip": "192.168.0.20", "versao": 3.3}
+
+    def controlar(self, ligar=None, brilho=None, cor=None):
+        self.pedidos.append({"ligar": ligar, "brilho": brilho, "cor": cor})
+        if self.erro:
+            raise self.erro
+        if cor:
+            return f"deixei a lâmpada em {cor}" + (f" com {brilho}% de brilho" if brilho else "")
+        return "desliguei a lâmpada" if ligar is False else "liguei a lâmpada"
+
+    def estado(self):
+        if self.erro:
+            raise self.erro
+        return self.dps
 
 
 def carregar_servidor(destino: Path, **config):
@@ -324,6 +346,96 @@ class TestServidor(unittest.TestCase):
         self.assertEqual([a["argumentos"]["nome"] for a in r.get_json()["acoes"]], [PROGRAMA, "cmd"])
         self.popen.assert_called_once()
 
+    # ---------- lâmpada ----------
+
+    def com_lampada(self, erro=None):
+        falsa = LampadaDeMentira(erro)
+        patcher = mock.patch.object(self.servidor, "LAMPADA", falsa)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return falsa
+
+    def test_ferramenta_da_lampada_so_aparece_com_lampada(self):
+        self.llm.programar(resposta_texto("Oi."))
+        self.enviar_texto("oi")
+        nomes = [f["function"]["name"] for f in self.llm.pedidos_de_chat()[0]["json"]["tools"]]
+        self.assertEqual(nomes, ["abrir_programa"])
+
+        self.com_lampada()
+        self.llm.programar(resposta_texto("Oi."))
+        self.enviar_texto("oi")
+        ferramentas = self.llm.pedidos_de_chat()[0]["json"]["tools"]
+        self.assertEqual([f["function"]["name"] for f in ferramentas], ["abrir_programa", "controlar_lampada"])
+        cores = ferramentas[1]["function"]["parameters"]["properties"]["cor"]["enum"]
+        self.assertEqual(cores, self.servidor.lampada.NOMES_DAS_CORES)  # o LLM só escolhe da lista
+
+    def test_lampada_funciona_mesmo_com_o_pc_desligado(self):
+        self.com_lampada()
+        self.llm.programar(resposta_texto("Oi."))
+        with mock.patch.object(self.servidor, "PC_URL", "http://127.0.0.1:9"):
+            self.enviar_texto("acende a luz")
+        nomes = [f["function"]["name"] for f in self.llm.pedidos_de_chat()[0]["json"]["tools"]]
+        self.assertEqual(nomes, ["controlar_lampada"])
+
+    def test_fluxo_completo_com_a_lampada(self):
+        falsa = self.com_lampada()
+        self.llm.programar(
+            resposta_ferramenta("chamada-1", "controlar_lampada", {"cor": "azul", "brilho": 40}),
+            resposta_texto("Pronto, a luz está azul."),
+        )
+        r = self.enviar_texto("deixa a luz azul com 40 por cento")
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["resposta"], "Pronto, a luz está azul.")
+        self.assertEqual(r.get_json()["acoes"], [{
+            "ferramenta": "controlar_lampada", "argumentos": {"cor": "azul", "brilho": 40},
+            "resultado": {"ok": True, "descricao": "deixei a lâmpada em azul com 40% de brilho"}}])
+        self.assertEqual(falsa.pedidos, [{"ligar": None, "brilho": 40, "cor": "azul"}])
+        resultado = self.llm.pedidos_de_chat()[1]["json"]["messages"][-1]
+        self.assertEqual(json.loads(resultado["content"]),
+                         {"ok": True, "descricao": "deixei a lâmpada em azul com 40% de brilho"})
+
+    def test_argumentos_da_lampada_sao_conferidos(self):
+        falsa = self.com_lampada()
+        casos = [({}, "diga o que fazer com a lâmpada"),
+                 ({"ligar": "sim"}, "o campo ligar precisa ser verdadeiro ou falso"),
+                 ({"brilho": "muito"}, "o brilho precisa ser um número de 1 a 100"),
+                 ({"brilho": True}, "o brilho precisa ser um número de 1 a 100"),
+                 ({"brilho": float("inf")}, "o brilho precisa ser um número de 1 a 100"),  # o JSON aceita 1e999
+                 ({"cor": "dourado"}, "não conheço a cor dourado; posso usar: branco, branco quente")]
+        for argumentos, erro in casos:
+            with self.subTest(argumentos=argumentos):
+                resultado = self.servidor.controlar_lampada(argumentos)
+                self.assertIn(erro, resultado["erro"])
+        self.assertEqual(falsa.pedidos, [])
+        # Brilho fora da faixa é ajustado; nome de cor com maiúsculas e espaços é normalizado.
+        self.servidor.controlar_lampada({"brilho": 150, "cor": " Branco  Quente "})
+        self.servidor.controlar_lampada({"brilho": "0"})
+        self.assertEqual(falsa.pedidos, [{"ligar": None, "brilho": 100, "cor": "branco quente"},
+                                         {"ligar": None, "brilho": 1, "cor": None}])
+
+    def test_lampada_offline_explica_em_portugues(self):
+        erro = self.servidor.lampada.ErroNaLampada("a lâmpada não respondeu: confira se o interruptor dela está ligado",
+                                                  "905 Network Error: Device Unreachable")
+        self.com_lampada(erro)
+        resultado = self.servidor.controlar_lampada({"ligar": True})
+        self.assertEqual(resultado, {"erro": "a lâmpada não respondeu: confira se o interruptor dela está ligado"})
+        self.assertIn("detalhe técnico: 905 Network Error: Device Unreachable", self.terminal.getvalue())
+
+    def test_sem_lampada_configurada(self):
+        self.llm.programar(resposta_ferramenta("chamada-1", "controlar_lampada", {"ligar": True}),
+                           resposta_texto("Não tenho lâmpada configurada."))
+        r = self.enviar_texto("acende a luz")
+        self.assertEqual(r.get_json()["acoes"][0]["resultado"], {"erro": "não há lâmpada configurada no servidor"})
+
+    def test_resumo_de_reserva_conta_programa_e_lampada(self):
+        self.com_lampada()
+        self.llm.programar(resposta_ferramenta("chamada-1", "controlar_lampada", {"cor": "azul"}),
+                           resposta_ferramenta("chamada-2", "abrir_programa", {"nome": PROGRAMA}),
+                           resposta_ferramenta("chamada-3", "abrir_programa", {"nome": PROGRAMA}))
+        r = self.enviar_texto("luz azul e abre o programa de teste")
+        self.assertEqual(r.get_json()["resposta"], f"Pronto, abri {PROGRAMA}, deixei a lâmpada em azul.")
+
     def test_argumentos_invalidos_do_llm_nao_quebram(self):
         for argumentos in ("{nome: chrome", "null", f'"{PROGRAMA}"', f'["{PROGRAMA}"]', "", None):
             with self.subTest(argumentos=argumentos):
@@ -559,6 +671,48 @@ class TestServidorConfig(unittest.TestCase):
         self.assertIn("Falta a biblioteca requests.", str(saida.exception.code))
         self.assertIn("pip install -r requirements.txt", str(saida.exception.code))
 
+    LAMPADA_VALIDA = {"id": "eb1234567890abcdef12", "chave_local": "0123456789abcdef", "ip": "192.168.0.20",
+                      "versao": "3.3"}
+
+    def test_bloco_da_lampada_incompleto_deixa_so_a_lampada_desligada(self):
+        exemplo = json.loads((PASTA_SERVIDOR / "config_servidor.example.json").read_text(encoding="utf-8"))["lampada"]
+        parcial = {**exemplo, "id": self.LAMPADA_VALIDA["id"], "chave_local": self.LAMPADA_VALIDA["chave_local"]}
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            sem = carregar_servidor(Path(tmp) / "sem")
+            com_exemplo = carregar_servidor(Path(tmp) / "exemplo", lampada=exemplo)
+            meio = carregar_servidor(Path(tmp) / "parcial", lampada=parcial)
+        self.assertIsNone(sem.LAMPADA)
+        self.assertEqual(sem.aviso_da_lampada(), "[servidor] nenhuma lâmpada configurada.")
+        self.assertIsNone(com_exemplo.LAMPADA)
+        self.assertEqual(com_exemplo.LAMPADA_FALTANDO, ["id", "chave_local", "ip", "versao"])
+        self.assertIsNone(meio.LAMPADA)
+        self.assertIn('falta preencher ip, versao no bloco "lampada"', meio.aviso_da_lampada())
+
+    @unittest.skipUnless(importlib.util.find_spec("tinytuya"), "instale celular_servidor/requirements.txt (tinytuya)")
+    def test_lampada_configurada(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            servidor = carregar_servidor(Path(tmp) / "servidor", lampada=self.LAMPADA_VALIDA)
+        self.assertEqual(servidor.LAMPADA.config, {**self.LAMPADA_VALIDA, "versao": 3.3})
+        self.assertEqual(servidor.aviso_da_lampada(), "[servidor] lâmpada em 192.168.0.20 (protocolo 3.3).")
+
+    def test_lampada_com_valor_errado_encerra_com_mensagem(self):
+        saida = self.rodar_servidor({**self.VALIDO, "lampada": {**self.LAMPADA_VALIDA, "chave_local": "curta"}})
+        self.assertEqual(saida.returncode, 1)
+        self.assertIn('"chave_local" da lâmpada precisa ter 16 caracteres', saida.stderr)
+        self.assertNotIn("Traceback", saida.stderr)
+
+    def test_lampada_sem_tinytuya_instalado(self):
+        procurar = importlib.util.find_spec
+
+        def sem_tinytuya(nome, *args, **kwargs):
+            return None if nome == "tinytuya" else procurar(nome, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, \
+                mock.patch("importlib.util.find_spec", side_effect=sem_tinytuya), \
+                self.assertRaises(SystemExit) as saida:
+            carregar_servidor(Path(tmp) / "servidor", lampada=self.LAMPADA_VALIDA)
+        self.assertIn("Falta a biblioteca tinytuya", str(saida.exception.code))
+
     def test_espacos_em_volta_das_chaves_sao_removidos(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             servidor = carregar_servidor(Path(tmp) / "servidor", pc_token=f"  {TOKEN} ", llm_api_key=" chave\n")
@@ -593,6 +747,7 @@ class TestServidorConfig(unittest.TestCase):
                 processo.stdout.close()
         saida = "".join(linhas)
         self.assertIn("[servidor] para parar, aperte Ctrl+C.", saida)
+        self.assertIn("[servidor] nenhuma lâmpada configurada.", saida)
         for ingles in ("Serving Flask app", "development server", "Running on", "GET / HTTP"):
             self.assertNotIn(ingles, saida)
 

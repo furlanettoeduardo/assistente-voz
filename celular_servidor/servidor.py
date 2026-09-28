@@ -6,6 +6,7 @@ Fluxo: áudio -> Whisper (Groq) -> LLM com ferramentas -> agente do PC -> respos
 Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo aparelho.
 """
 import errno
+import importlib.util
 import json
 import logging
 import re
@@ -23,6 +24,8 @@ try:
 except ImportError as e:  # o .venv não foi ativado ou o requirements não foi instalado
     sys.exit(f"Falta a biblioteca {e.name}. Na pasta celular_servidor, rode: pip install -r requirements.txt\n"
              "No PC, ative antes o .venv; no Termux, dá para rodar bash scripts/termux-instalar.sh na pasta do projeto.")
+
+import lampada
 
 BASE = Path(__file__).parent
 ARQUIVO_CONFIG = BASE / "config_servidor.json"
@@ -122,6 +125,37 @@ if not isinstance(HOST, str) or not HOST:
     sys.exit(f'Em {ARQUIVO_CONFIG}, "host" precisa ser um texto, como "127.0.0.1".')
 PORTA = ler_porta(CFG, ARQUIVO_CONFIG, 8000)
 
+
+def exemplo_da_lampada():
+    """Bloco "lampada" do config de exemplo, para reconhecer os campos ainda não preenchidos."""
+    try:
+        return json.loads((BASE / "config_servidor.example.json").read_text(encoding="utf-8")).get("lampada")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+# A lâmpada é opcional: sem o bloco "lampada", ou com campos por preencher, o servidor funciona sem ela.
+try:
+    _CONFIG_LAMPADA, LAMPADA_FALTANDO = lampada.ler_config(CFG.get("lampada"), exemplo_da_lampada())
+except ValueError as e:
+    sys.exit(f"Em {ARQUIVO_CONFIG}, {e}")
+if _CONFIG_LAMPADA and importlib.util.find_spec("tinytuya") is None:
+    sys.exit("Falta a biblioteca tinytuya, usada pela lâmpada. Na pasta celular_servidor, rode: "
+             "pip install -r requirements.txt\nNo PC, ative antes o .venv; no Termux, rode bash "
+             "scripts/termux-instalar.sh na pasta do projeto, que instala também o python-cryptography.")
+LAMPADA = lampada.Lampada(_CONFIG_LAMPADA) if _CONFIG_LAMPADA else None
+
+
+def aviso_da_lampada() -> str:
+    """Uma linha para o terminal dizendo se a lâmpada está em uso."""
+    if LAMPADA is not None:
+        return f"[servidor] lâmpada em {LAMPADA.config['ip']} (protocolo {LAMPADA.config['versao']})."
+    if LAMPADA_FALTANDO:
+        return (f"[servidor] lâmpada ainda não configurada: falta preencher {', '.join(LAMPADA_FALTANDO)} no "
+                "bloco \"lampada\" do config_servidor.json (se não tiver lâmpada, apague o bloco).")
+    return "[servidor] nenhuma lâmpada configurada."
+
+
 GROQ_URL = "https://api.groq.com/openai/v1"
 PC_URL = CFG["pc_url"].rstrip("/")
 PC_HEADERS = {"Authorization": f"Bearer {CFG['pc_token']}"}
@@ -173,24 +207,46 @@ def programas_disponiveis() -> list[str]:
         return []
 
 
-def montar_ferramentas(programas: list[str]) -> list[dict]:
-    if not programas:
-        return []
-    return [{
-        "type": "function",
-        "function": {
-            "name": "abrir_programa",
-            "description": "Abre um programa no computador do usuário.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "nome": {"type": "string", "enum": programas,
-                             "description": "Nome do programa a abrir."}
-                },
-                "required": ["nome"],
+FERRAMENTA_LAMPADA = {
+    "type": "function",
+    "function": {
+        "name": "controlar_lampada",
+        "description": "Controla a lâmpada inteligente da casa: liga, desliga, muda o brilho ou a cor. "
+                       "Mande só o que o usuário pediu.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ligar": {"type": "boolean", "description": "true para ligar, false para desligar."},
+                "brilho": {"type": "integer", "minimum": 1, "maximum": 100,
+                           "description": "Brilho em porcentagem, de 1 a 100."},
+                "cor": {"type": "string", "enum": lampada.NOMES_DAS_CORES, "description": "Cor da luz."},
             },
         },
-    }]
+    },
+}
+
+
+def montar_ferramentas(programas: list[str]) -> list[dict]:
+    ferramentas = []
+    if programas:
+        ferramentas.append({
+            "type": "function",
+            "function": {
+                "name": "abrir_programa",
+                "description": "Abre um programa no computador do usuário.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nome": {"type": "string", "enum": programas,
+                                 "description": "Nome do programa a abrir."}
+                    },
+                    "required": ["nome"],
+                },
+            },
+        })
+    if LAMPADA is not None:
+        ferramentas.append(FERRAMENTA_LAMPADA)
+    return ferramentas
 
 
 def ler_argumentos(bruto) -> dict:
@@ -222,7 +278,37 @@ def executar_ferramenta(nome: str, args: dict) -> dict:
             print(f"[servidor] não consegui falar com o agente do PC em {PC_URL} (detalhe técnico: {e})",
                   file=sys.stderr)
             return {"erro": "não consegui falar com o computador"}
+    if nome == "controlar_lampada":
+        return controlar_lampada(args)
     return {"erro": f"ferramenta desconhecida: {nome}"}
+
+
+def controlar_lampada(args: dict) -> dict:
+    """Confere os argumentos que vieram do LLM e manda o pedido para a lâmpada."""
+    if LAMPADA is None:
+        return {"erro": "não há lâmpada configurada no servidor"}
+    ligar, brilho, cor = args.get("ligar"), args.get("brilho"), args.get("cor")
+    if ligar is not None and not isinstance(ligar, bool):
+        return {"erro": "o campo ligar precisa ser verdadeiro ou falso"}
+    if brilho is not None:
+        try:
+            brilho = int(brilho) if not isinstance(brilho, bool) else None
+        except (TypeError, ValueError, OverflowError):  # OverflowError: o JSON aceita 1e999 e Infinity
+            brilho = None
+        if brilho is None:
+            return {"erro": "o brilho precisa ser um número de 1 a 100"}
+        brilho = max(1, min(100, brilho))
+    if cor is not None:
+        cor = " ".join(str(cor).lower().split())
+        if cor not in lampada.NOMES_DAS_CORES:
+            return {"erro": f"não conheço a cor {cor}; posso usar: {', '.join(lampada.NOMES_DAS_CORES)}"}
+    if ligar is None and brilho is None and cor is None:
+        return {"erro": "diga o que fazer com a lâmpada: ligar, desligar, mudar o brilho ou a cor"}
+    try:
+        return {"ok": True, "descricao": LAMPADA.controlar(ligar=ligar, brilho=brilho, cor=cor)}
+    except lampada.ErroNaLampada as e:
+        print(f"[servidor] falha na lâmpada: {e} (detalhe técnico: {e.detalhe})", file=sys.stderr)
+        return {"erro": str(e)}
 
 
 # ---------- LLM ----------
@@ -238,10 +324,12 @@ def limpar(texto: str) -> str:
 
 def resumir(acoes: list[dict]) -> str:
     """Resposta de reserva quando o modelo não fecha com um texto: conta o que foi feito."""
-    abertos = [a["resultado"]["programa"] for a in acoes
-               if isinstance(a["resultado"], dict) and a["resultado"].get("ok")]
-    if abertos:
-        return f"Pronto, abri {' e '.join(abertos)}."
+    certas = [a["resultado"] for a in acoes if isinstance(a["resultado"], dict) and a["resultado"].get("ok")]
+    abertos = [r["programa"] for r in certas if r.get("programa")]
+    feitos = [f"abri {' e '.join(abertos)}"] if abertos else []
+    feitos += [r["descricao"] for r in certas if r.get("descricao")]
+    if feitos:
+        return f"Pronto, {', '.join(feitos)}."
     return "Fiz o que consegui, mas algo não saiu como esperado."
 
 
@@ -434,6 +522,7 @@ if __name__ == "__main__":
     sock = abrir_socket(HOST, PORTA)
     servidor = make_server(HOST, PORTA, app, threaded=True, fd=sock.fileno())
     print(f"[servidor] pronto: abra http://localhost:{sock.getsockname()[1]} no navegador deste aparelho.")
+    print(aviso_da_lampada())
     print("[servidor] para parar, aperte Ctrl+C.", flush=True)
     servidor.serve_forever()  # o Werkzeug já trata o Ctrl+C
     print("[servidor] encerrado.")

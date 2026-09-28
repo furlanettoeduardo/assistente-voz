@@ -56,11 +56,15 @@ def importar_copia(pasta: Path, modulo: str):
     spec = importlib.util.spec_from_file_location(nome, pasta / f"{modulo}.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[nome] = mod  # o Flask procura o módulo aqui para achar a pasta static
+    sys.modules.pop("lampada", None)  # o "import lampada" do servidor precisa achar o desta cópia
+    sys.path.insert(0, str(pasta))
     try:
         spec.loader.exec_module(mod)
     except BaseException:
         del sys.modules[nome]
         raise
+    finally:
+        sys.path.remove(str(pasta))
     return mod
 
 
