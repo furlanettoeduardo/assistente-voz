@@ -1,6 +1,6 @@
 """
-Testes do JavaScript da página. Rodam a função pedir() do index.html no Node, com um fetch
-falso; sem Node instalado, são pulados (o projeto não depende dele).
+Testes do JavaScript da página. Rodam funções do index.html no Node (a pedir() com um fetch
+falso); sem Node instalado, são pulados (o projeto não depende dele).
 """
 import json
 import re
@@ -35,20 +35,37 @@ const casos = {
 })();
 """
 
+ACOES_JS = """
+const acoes = [
+  { ferramenta: "abrir_programa", argumentos: { nome: "calculadora" }, resultado: { ok: true } },
+  { ferramenta: "abrir_programa", argumentos: { nome: "paint" }, resultado: { erro: "não liberado" } },
+  { ferramenta: "controlar_lampada", argumentos: { cor: "azul" },
+    resultado: { ok: true, descricao: "deixei a lâmpada em azul" } },
+  { ferramenta: "controlar_lampada", argumentos: { ligar: true }, resultado: { erro: "a lâmpada não respondeu" } },
+  { ferramenta: "controlar_lampada", argumentos: {}, resultado: {} },
+];
+console.log(JSON.stringify(acoes.map(descreverAcao)));
+"""
+
+
+def rodar_no_node(nome: str, codigo: str):
+    """Roda a função `nome` do index.html seguida de `codigo` no Node e devolve o JSON impresso."""
+    html = (PASTA_SERVIDOR / "static" / "index.html").read_text(encoding="utf-8")
+    funcao = re.search(rf"^(async )?function {nome}\(.*?^}}$", html, flags=re.MULTILINE | re.DOTALL)
+    assert funcao, f"não achei a função {nome}() no index.html"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        script = Path(tmp) / f"{nome}.js"
+        script.write_text(funcao.group(0) + codigo, encoding="utf-8")
+        saida = subprocess.run([NODE, str(script)], capture_output=True, text=True,
+                               encoding="utf-8", timeout=30, check=True)
+    return json.loads(saida.stdout)
+
 
 @unittest.skipUnless(NODE, "Node não está instalado; os testes do JavaScript da página foram pulados")
 class TestPedirDaPagina(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        html = (PASTA_SERVIDOR / "static" / "index.html").read_text(encoding="utf-8")
-        funcao = re.search(r"^async function pedir\(.*?^}$", html, flags=re.MULTILINE | re.DOTALL)
-        assert funcao, "não achei a função pedir() no index.html"
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            script = Path(tmp) / "pedir.js"
-            script.write_text(funcao.group(0) + CASOS_JS, encoding="utf-8")
-            saida = subprocess.run([NODE, str(script)], capture_output=True, text=True,
-                                   encoding="utf-8", timeout=30, check=True)
-        cls.resultado = json.loads(saida.stdout)
+        cls.resultado = rodar_no_node("pedir", CASOS_JS)
 
     def test_servidor_fora_do_ar(self):
         self.assertEqual(self.resultado["servidor_fora"]["erro"],
@@ -67,6 +84,18 @@ class TestPedirDaPagina(unittest.TestCase):
     def test_resposta_certa_mas_ilegivel(self):
         self.assertEqual(self.resultado["ok_invalido"]["erro"],
                          "O servidor mandou uma resposta que a página não entendeu. Tente de novo.")
+
+
+@unittest.skipUnless(NODE, "Node não está instalado; os testes do JavaScript da página foram pulados")
+class TestAcoesNaPagina(unittest.TestCase):
+    def test_programas_e_lampada(self):
+        self.assertEqual(rodar_no_node("descreverAcao", ACOES_JS), [
+            "Abriu: calculadora",
+            "Não abriu: paint (não liberado)",
+            "Deixei a lâmpada em azul",
+            "A lâmpada não respondeu",
+            "Erro na lâmpada",
+        ])
 
 
 if __name__ == "__main__":

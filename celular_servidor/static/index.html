@@ -88,6 +88,17 @@ function falar(texto) {
   speechSynthesis.speak(fala);
 }
 
+// Uma linha curta para cada ação que o servidor executou.
+function descreverAcao(a) {
+  const r = a.resultado || {};
+  const maiuscula = t => t.charAt(0).toUpperCase() + t.slice(1);
+  if (a.ferramenta === "controlar_lampada") {
+    return maiuscula(r.ok ? (r.descricao || "lâmpada atualizada") : (r.erro || "erro na lâmpada"));
+  }
+  const nome = (a.argumentos && a.argumentos.nome) || "?";
+  return r.ok ? `Abriu: ${nome}` : `Não abriu: ${nome} (${r.erro || "erro"})`;
+}
+
 function registrar({ transcricao, resposta, acoes }) {
   const item = document.createElement("li");
   const linha = (classe, texto) => {
@@ -95,10 +106,7 @@ function registrar({ transcricao, resposta, acoes }) {
   };
   linha("voce", transcricao);
   linha("ela", resposta);
-  (acoes || []).forEach(a => {
-    const ok = a.resultado && a.resultado.ok;
-    linha("acao", `${ok ? "Abriu" : "Não abriu"}: ${a.argumentos.nome || "?"}${ok ? "" : " (" + (a.resultado.erro || "erro") + ")"}`);
-  });
+  (acoes || []).forEach(a => linha("acao", descreverAcao(a)));
   historico.prepend(item);
 }
 
