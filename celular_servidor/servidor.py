@@ -13,6 +13,7 @@ import re
 import socket
 import sys
 import traceback
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -168,6 +169,22 @@ PROMPT_SISTEMA = (
     "sem markdown, listas ou emojis. Use as ferramentas apenas quando o usuário pedir "
     "uma ação. Se ele pedir um programa que não está na lista, diga quais estão disponíveis."
 )
+
+DIAS_DA_SEMANA = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado",
+                  "domingo")
+MESES = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+         "novembro", "dezembro")
+
+
+def agora() -> datetime:
+    return datetime.now().astimezone()  # hora do aparelho que roda o servidor, sem depender do tzdata
+
+
+def descrever_momento(momento: datetime) -> str:
+    """Data e hora por extenso, sem depender do locale do sistema (que no Windows vem em inglês)."""
+    return (f"Agora é {DIAS_DA_SEMANA[momento.weekday()]}, {momento.day} de {MESES[momento.month - 1]} de "
+            f"{momento.year}, {momento:%H:%M}.")
+
 
 app = Flask(__name__, static_folder="static")
 
@@ -338,7 +355,7 @@ def resumir(acoes: list[dict]) -> str:
 def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
     programas = programas_disponiveis()
     ferramentas = montar_ferramentas(programas)
-    sistema = PROMPT_SISTEMA
+    sistema = f"{PROMPT_SISTEMA} {descrever_momento(agora())}"
     if not programas:
         sistema += " O computador está desligado ou inacessível agora; avise se pedirem um programa."
 

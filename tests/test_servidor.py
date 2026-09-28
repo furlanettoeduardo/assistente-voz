@@ -17,6 +17,7 @@ import threading
 import time
 import unittest
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -184,6 +185,19 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(resultado["role"], "tool")
         self.assertEqual(resultado["tool_call_id"], "chamada-1")
         self.assertEqual(json.loads(resultado["content"]), {"ok": True, "programa": PROGRAMA})
+
+    def test_prompt_traz_a_data_e_a_hora(self):
+        # "Que horas são?" sai do prompt, sem ferramenta: o servidor manda o momento em cada pedido.
+        momento = datetime(2026, 9, 28, 7, 5, tzinfo=timezone(timedelta(hours=-3)))
+        self.assertEqual(self.servidor.descrever_momento(momento),
+                         "Agora é segunda-feira, 28 de setembro de 2026, 07:05.")
+        self.llm.programar(resposta_texto("São sete e cinco."))
+        with mock.patch.object(self.servidor, "agora", return_value=momento):
+            r = self.enviar_texto("que horas são?")
+        self.assertEqual(r.get_json()["resposta"], "São sete e cinco.")
+        sistema = self.llm.pedidos_de_chat()[0]["json"]["messages"][0]
+        self.assertEqual(sistema["role"], "system")
+        self.assertTrue(sistema["content"].endswith("Agora é segunda-feira, 28 de setembro de 2026, 07:05."))
 
     def test_programa_fora_da_lista_pedido_pelo_llm_e_recusado(self):
         self.llm.programar(
