@@ -8,6 +8,13 @@ config_servidor*.json*
 .env.*
 !.env.example
 
+# Arquivos que o "python -m tinytuya wizard" grava na pasta onde roda: têm a chave da API da Tuya
+# e a local key da lâmpada.
+tinytuya.json
+devices.json
+tuya-raw.json
+snapshot.json
+
 # Python
 __pycache__/
 *.py[cod]
