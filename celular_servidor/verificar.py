@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 TUDO_CERTO, COM_PROBLEMAS, NAO_SOBE, QUEBROU, INTERROMPIDO = 0, 1, 2, 3, 130
-TOTAL = 6
+TOTAL = 7
 PASTA = Path(__file__).resolve().parent
 
 
@@ -242,6 +242,38 @@ def verificar_token(srv, resposta, agente_ok: bool) -> bool:
     return True
 
 
+def verificar_lampada(srv) -> bool | None:
+    """True ou False conforme a lâmpada respondeu; None quando não há lâmpada, que é opcional."""
+    passo(7, "Lâmpada (opcional)")
+    if srv.LAMPADA is None:
+        if not srv.LAMPADA_FALTANDO:
+            pulado("nenhuma lâmpada configurada (é opcional).")
+            return None
+        if len(srv.LAMPADA_FALTANDO) == len(srv.lampada.CAMPOS):  # bloco intocado, como veio do exemplo
+            pulado(f"o bloco \"lampada\" de {caminho(srv.ARQUIVO_CONFIG)} ainda está como no exemplo: "
+                   "preencha se tiver lâmpada (veja o README) ou apague o bloco.")
+            return None
+        falhou(f"falta preencher {', '.join(srv.LAMPADA_FALTANDO)} no bloco \"lampada\" de "
+               f"{caminho(srv.ARQUIVO_CONFIG)}.",
+               "o id e a chave_local estão no devices.json que o tinytuya wizard gravou (\"id\" e \"key\")",
+               "o ip e a versao aparecem no tinytuya scan (\"Address\" e \"Version\"), com a lâmpada ligada "
+               "e na mesma rede",
+               "se não tiver lâmpada, apague o bloco \"lampada\" do config")
+        return False
+    try:
+        dps = srv.LAMPADA.estado()
+    except srv.lampada.ErroNaLampada as e:
+        falhou(f"{e}.",
+               "o IP da lâmpada pode ter mudado: rode o tinytuya scan de novo e reserve o IP dela no roteador",
+               "se a lâmpada foi pareada de novo no app, a chave_local mudou: rode o tinytuya wizard outra vez")
+        return False
+    if "20" not in dps or "21" not in dps:
+        falhou("a lâmpada respondeu, mas usa outros comandos, que o servidor ainda não sabe mandar.")
+        return False
+    ok(f"a lâmpada respondeu e está {'ligada' if dps.get('20') else 'desligada'}.")
+    return True
+
+
 def main() -> int:
     print("Diagnóstico da assistente de voz")
     if not verificar_instalacao():
@@ -281,6 +313,8 @@ def main() -> int:
     if not agente_ok:
         problemas += 1
     if not verificar_token(srv, resposta, agente_ok):
+        problemas += 1
+    if verificar_lampada(srv) is False:
         problemas += 1
 
     if problemas:

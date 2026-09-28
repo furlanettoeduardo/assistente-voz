@@ -28,6 +28,18 @@ CHAVE = "chave-falsa"
 _pastas = itertools.count()
 
 
+class LampadaDeTeste:
+    """Faz o papel da LAMPADA do servidor: responde `dps` ou levanta `erro`."""
+
+    def __init__(self, dps=None, erro=None):
+        self.dps, self.erro = dps, erro
+
+    def estado(self):
+        if self.erro:
+            raise self.erro
+        return self.dps
+
+
 @unittest.skipUnless(DEPENDENCIAS, "instale celular_servidor/requirements.txt para testar o diagnóstico")
 class TestVerificar(unittest.TestCase):
     @classmethod
@@ -53,8 +65,11 @@ class TestVerificar(unittest.TestCase):
                        "llm_api_key": CHAVE, "llm_model": "qwen-falso", "pc_url": self.servidor_agente.url,
                        "pc_token": TOKEN, "porta": 8000}
 
-    def verificar(self, config="padrao", **substituir) -> tuple[int, str]:
-        """Roda o main() do verificar.py numa cópia da pasta, com o Groq apontando para o falso."""
+    def verificar(self, config="padrao", lampada=None, **substituir) -> tuple[int, str]:
+        """
+        Roda o main() do verificar.py numa cópia da pasta, com o Groq apontando para o falso.
+        `lampada(srv)` devolve o objeto de teste que substitui a LAMPADA do servidor carregado.
+        """
         pasta = copiar_componente(PASTA_SERVIDOR, Path(self.tmp.name) / f"servidor{next(_pastas)}")
         if config is not None:
             config = self.config if config == "padrao" else config
@@ -67,7 +82,10 @@ class TestVerificar(unittest.TestCase):
         verificar = importar_copia(pasta, "verificar")
         with contextlib.redirect_stdout(io.StringIO()) as saida, contextlib.redirect_stderr(io.StringIO()):
             try:
-                importlib.import_module("servidor").GROQ_URL = self.llm.url
+                srv = importlib.import_module("servidor")
+                srv.GROQ_URL = self.llm.url
+                if lampada is not None:
+                    srv.LAMPADA = lampada(srv)
             except (SystemExit, ImportError):
                 pass  # config inválido ou Flask ausente: o próprio verificar vai explicar
             with contextlib.ExitStack() as pilha:
@@ -82,6 +100,8 @@ class TestVerificar(unittest.TestCase):
         self.assertEqual(codigo, 0, saida)
         self.assertEqual(saida.count("  OK: "), 6, saida)
         self.assertIn("Programas liberados: calculadora, navegador.", saida)
+        self.assertIn("[7/7] Lâmpada (opcional)", saida)
+        self.assertIn("PULADO: nenhuma lâmpada configurada (é opcional).", saida)
         self.assertIn("Tudo certo!", saida)
         # A chave do Groq foi testada só com a lista de modelos, sem áudio nem chat.
         caminhos = {p["caminho"] for p in self.llm.pedidos}
@@ -91,7 +111,7 @@ class TestVerificar(unittest.TestCase):
     def test_sem_config(self):
         codigo, saida = self.verificar(config=None)
         self.assertEqual(codigo, 2)
-        self.assertIn("[2/6] Arquivo de configuração", saida)
+        self.assertIn("[2/7] Arquivo de configuração", saida)
         self.assertIn("FALHOU: Arquivo de configuração não encontrado", saida)
         self.assertIn("Copie config_servidor.example.json", saida)
 
@@ -168,7 +188,7 @@ class TestVerificar(unittest.TestCase):
     def test_agente_fora_do_ar(self):
         codigo, saida = self.verificar(config={**self.config, "pc_url": "http://127.0.0.1:9"})
         self.assertEqual(codigo, 1)
-        self.assertIn("[5/6] Agente do PC em http://127.0.0.1:9", saida)
+        self.assertIn("[5/7] Agente do PC em http://127.0.0.1:9", saida)
         self.assertIn("FALHOU: não consegui conectar ao PC", saida)
         self.assertIn("iniciar_agente.bat", saida)
         self.assertIn("ipconfig", saida)
@@ -202,6 +222,44 @@ class TestVerificar(unittest.TestCase):
                                               "a API do LLM", "llm_api_key")
         self.assertIn("FALHOU: o endereço configurado para a API do LLM é inválido.", saida.getvalue())
         self.assertNotIn("respondeu", saida.getvalue())
+
+    def test_lampada_respondendo(self):
+        codigo, saida = self.verificar(lampada=lambda srv: LampadaDeTeste({"20": True, "21": "colour", "22": 500}))
+        self.assertEqual(codigo, 0, saida)
+        self.assertIn("OK: a lâmpada respondeu e está ligada.", saida)
+
+    def test_lampada_com_campos_faltando(self):
+        exemplo = json.loads((PASTA_SERVIDOR / "config_servidor.example.json").read_text(encoding="utf-8"))
+        bloco = {**exemplo["lampada"], "id": "eb1234567890abcdef12", "chave_local": "0123456789abcdef"}
+        codigo, saida = self.verificar(config={**self.config, "lampada": bloco})
+        self.assertEqual(codigo, 1)
+        self.assertIn('FALHOU: falta preencher ip, versao no bloco "lampada" de', saida)
+        self.assertIn("tinytuya scan", saida)
+        self.assertIn('apague o bloco "lampada"', saida)
+        self.assertIn("Encontrei 1 problema(s).", saida)
+
+    def test_lampada_como_no_exemplo_nao_conta_como_problema(self):
+        exemplo = json.loads((PASTA_SERVIDOR / "config_servidor.example.json").read_text(encoding="utf-8"))
+        codigo, saida = self.verificar(config={**self.config, "lampada": exemplo["lampada"]})
+        self.assertEqual(codigo, 0, saida)
+        self.assertIn('PULADO: o bloco "lampada" de', saida)
+        self.assertIn("ainda está como no exemplo: preencha se tiver lâmpada (veja o README) ou apague o bloco.",
+                      saida)
+
+    def test_lampada_sem_resposta(self):
+        def sem_resposta(srv):  # a classe de erro tem de ser a da cópia do servidor que o teste carregou
+            return LampadaDeTeste(erro=srv.lampada.ErroNaLampada("a lâmpada não respondeu: confira", "905"))
+
+        codigo, saida = self.verificar(lampada=sem_resposta)
+        self.assertEqual(codigo, 1)
+        self.assertIn("FALHOU: a lâmpada não respondeu: confira.", saida)
+        self.assertIn("reserve o IP dela no roteador", saida)
+        self.assertNotIn("905", saida)
+
+    def test_lampada_de_outro_modelo(self):
+        codigo, saida = self.verificar(lampada=lambda srv: LampadaDeTeste({"1": True, "2": 255}))
+        self.assertEqual(codigo, 1)
+        self.assertIn("usa outros comandos", saida)
 
     def test_erro_inesperado_tem_codigo_proprio(self):
         def quebrar(*args):
