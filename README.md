@@ -1,10 +1,10 @@
-# Assistente de voz caseira: fase 0.1a (abrir programas)
+# Assistente de voz caseira: fase 0.1b (programas e lâmpada)
 
-Você segura o botão de falar numa página, fala "abre a calculadora" e o programa abre no PC. Por enquanto, tudo roda no mesmo notebook.
+Você segura o botão de falar numa página, fala "abre a calculadora" e o programa abre no PC, ou "acende a luz" e a lâmpada acende. Por enquanto, tudo roda no mesmo notebook.
 
 O projeto tem duas partes:
 
-- `celular_servidor/`: o servidor, que é o cérebro. Mostra a página com o botão de falar, transcreve o áudio no Groq, consulta o LLM e manda o PC agir. O nome da pasta vem da primeira versão: hoje ele roda no notebook, também roda num celular com Termux e, no futuro, vai rodar num Raspberry Pi.
+- `celular_servidor/`: o servidor, que é o cérebro. Mostra a página com o botão de falar, transcreve o áudio no Groq, consulta o LLM, manda o PC agir e controla a lâmpada Tuya pela rede de casa. O nome da pasta vem da primeira versão: hoje ele roda no notebook, também roda num celular com Termux e, no futuro, vai rodar num Raspberry Pi.
 - `pc_agente/`: roda no computador e abre programas quando o servidor pede. Usa só a biblioteca padrão do Python.
 
 O LLM nunca executa comandos: ele só escolhe um nome da lista de programas do agente, que roda o comando cadastrado sem shell, e todo pedido ao PC exige token.
@@ -49,7 +49,7 @@ git clone https://github.com/furlanettoeduardo/assistente-voz.git
 cd assistente-voz
 ```
 
-O agente do PC não precisa de nada além do Python. O servidor precisa de Flask e requests, listados em `celular_servidor/requirements.txt`. Para testar o servidor e rodar os testes no PC, use um ambiente virtual:
+O agente do PC não precisa de nada além do Python. O servidor precisa de Flask, requests e tinytuya (este para a lâmpada), listados em `celular_servidor/requirements.txt`. Para testar o servidor e rodar os testes no PC, use um ambiente virtual:
 
 Windows (PowerShell):
 
@@ -122,6 +122,7 @@ No Windows, `["cmd", "/c", "start", "", "nome"]` funciona para a maioria dos pro
 | `pc_url` | Endereço do agente, com `http://`, IP e porta. No modo notebook, `http://127.0.0.1:8765`; com o servidor em outro aparelho, o IP do PC na rede, como `http://192.168.0.10:8765`. |
 | `pc_token` | O mesmo valor de `token` do agente. |
 | `host` e `porta` | Onde o servidor escuta. Padrão: `127.0.0.1:8000`, só o próprio aparelho acessa. |
+| `lampada` | Opcional. `id`, `chave_local`, `ip` e `versao` da lâmpada Tuya, como explica [Lâmpada](#lâmpada-opcional). Sem lâmpada, apague o bloco. |
 
 Em setembro de 2026, o Qwen disponível no Groq é o `qwen/qwen3.8-27b`, na categoria Preview. Modelos Preview trocam de nome ou saem do ar com pouco aviso, então confira a lista antes de preencher.
 
@@ -158,6 +159,74 @@ python servidor.py
 
 O `verificar.py` confere tudo o que o servidor precisa (veja [Diagnóstico](#diagnóstico)). Depois, abra `http://localhost:8000` no navegador do notebook. Comece pelo campo de texto ("abre a calculadora"); depois teste o botão de voz.
 
+## Lâmpada (opcional)
+
+O servidor controla uma lâmpada Tuya, como a Elgin Smart Color, direto pela rede de casa, com a biblioteca `tinytuya`: os comandos não passam pela nuvem nem pelo app. Dá para falar "acende a luz", "apaga a luz", "deixa a luz azul" ou "diminui a luz para 30%". As cores são branco, branco quente, branco frio, vermelho, laranja, amarelo, verde, ciano, azul, roxo e rosa; o brilho vai de 1% a 100%. Sem lâmpada configurada, o resto funciona normalmente.
+
+Para falar com a lâmpada, o servidor precisa de quatro dados dela: o `id`, a `chave_local` (a senha que ela usa na rede), o `ip` e a `versao` do protocolo. Se você instalou o servidor antes desta versão, instale de novo o `requirements.txt`, que agora traz o `tinytuya`. Os comandos abaixo usam o Python do ambiente virtual: ative o `.venv` antes (ou chame o Python dele direto, como `.venv\Scripts\python.exe -m tinytuya wizard`).
+
+### 1. Pareie a lâmpada no app
+
+Pareie a lâmpada no app **Smart Life** (ou Tuya Smart) e confira que ela liga e desliga pelo app.
+
+### 2. Pegue o id e a chave local (uma vez)
+
+A chave local só sai da nuvem da Tuya, então é preciso uma conta gratuita na plataforma de desenvolvedor dela. Ela serve só para buscar a chave: depois disso, o controle é todo local.
+
+1. Crie uma conta em [platform.tuya.com](https://platform.tuya.com) e, em **Cloud → Development**, crie um projeto (**Create Cloud Project**) com o data center **Western America**, onde ficam as contas do Smart Life no Brasil. O projeto vem com o **IoT Core** em teste gratuito de 1 mês, que se renova de graça. Ele só precisa estar ativo quando você rodar o wizard: com o teste vencido, a lâmpada continua funcionando pelo servidor.
+2. No projeto, abra **Devices → Link App Account → Add App Account** e leia o QR code com o app Smart Life (aba **Eu**, ícone de leitura no canto de cima). A lâmpada aparece na lista de aparelhos do projeto.
+3. Rode o wizard na raiz do repositório:
+   ```
+   python -m tinytuya wizard
+   ```
+   Ele pede a **Access ID** e o **Access Secret** (em **Overview**, no projeto), o ID de algum aparelho da conta (a lista de aparelhos do projeto mostra) e a região: responda `us`. As outras perguntas podem ficar no padrão.
+
+   Se ele não achar a lâmpada, tente a região `us-e`: acrescente o data center **Eastern America** ao projeto e rode o wizard de novo. Na segunda vez ele mostra os dados salvos e pergunta **Use existing credentials**: responda `n` e digite tudo outra vez, agora com `us-e`, senão ele repete a região `us`.
+
+O wizard grava o `devices.json` na pasta onde rodou, com o `id` e a `key` de cada aparelho. Se a lâmpada estiver desligada ou você estiver fora de casa, ele avisa "No IP found": não tem problema, o IP vem no próximo passo. O `devices.json` e os outros arquivos que o wizard grava (`tinytuya.json`, `tuya-raw.json` e `snapshot.json`) guardam segredos: já estão no `.gitignore` e não devem ser enviados a ninguém.
+
+Se um dia a lâmpada for pareada de novo no app (depois de um reset, por exemplo), a chave muda: rode o wizard outra vez.
+
+### 3. Descubra o IP e a versão (em casa)
+
+Com a lâmpada ligada e o PC na mesma rede Wi-Fi que ela, rode:
+
+```
+python -m tinytuya scan
+```
+
+A lâmpada aparece com `Address` (o IP) e `Version` (3.3, 3.4 ou 3.5). O scan escuta os anúncios que ela manda pela rede, nas portas UDP 6666, 6667 e 7000. No Windows, a [rede precisa estar como privada](#2-deixe-a-rede-wi-fi-do-windows-como-privada) e o Python liberado no firewall em redes privadas, senão o firewall bloqueia esses anúncios; no Linux com o ufw ativo, libere as portas com `sudo ufw allow 6666:6667/udp` e `sudo ufw allow 7000/udp`. Reserve esse IP para a lâmpada no roteador (reserva de DHCP), para ele não mudar.
+
+### 4. Preencha o bloco da lâmpada
+
+Acrescente o bloco `lampada` ao seu `config_servidor.json`, como no `.example.json`: `id` e `chave_local` são o `id` e a `key` do `devices.json`; `ip` e `versao` são o `Address` e a `Version` do scan. Por exemplo (valores inventados):
+
+```
+  "porta": 8000,
+
+  "lampada": {
+    "id": "eb1234567890abcdef12",
+    "chave_local": "0123456789abcdef",
+    "ip": "192.168.0.20",
+    "versao": "3.3"
+  }
+}
+```
+
+Repare na vírgula depois da linha anterior ao bloco. Depois, na pasta `celular_servidor`, rode o diagnóstico, que testa a lâmpada no passo 7, e suba o servidor de novo:
+
+```
+cd celular_servidor
+python verificar.py
+python servidor.py
+```
+
+Ao subir, o servidor mostra a linha `[servidor] lâmpada em 192.168.0.20 (protocolo 3.3)`. Enquanto faltar algum dado, ele sobe sem a lâmpada e diz o que falta.
+
+Deixe o interruptor da lâmpada sempre ligado: desligada no interruptor, ela sai da rede, e a assistente avisa que a lâmpada não respondeu.
+
+No [modo celular](#rodando-no-celular-opcional), o servidor fala com a lâmpada do mesmo jeito, desde que o celular esteja na mesma rede Wi-Fi que ela.
+
 ## Diagnóstico
 
 Para rodar só o diagnóstico, a qualquer hora:
@@ -174,7 +243,8 @@ Ele confere, em ordem, e explica em português o que falhou e como resolver:
 3. a chave do Groq funciona e o modelo de transcrição existe;
 4. o modelo em `llm_model` existe na API configurada;
 5. o agente do PC responde em `pc_url`;
-6. o agente aceita o `pc_token`.
+6. o agente aceita o `pc_token`;
+7. a lâmpada responde, se houver uma configurada.
 
 Para testar as chaves, ele só pede a lista de modelos da API: não grava áudio nem gasta tokens. Ele termina com código 0 quando está tudo certo, 1 quando há problemas mas o servidor consegue subir, 2 quando o servidor nem sobe, 3 quando o próprio diagnóstico quebra e 130 quando é interrompido com Ctrl+C. As dicas mostram o caminho completo dos arquivos, então funcionam de qualquer pasta.
 
@@ -227,7 +297,7 @@ cd assistente-voz
 bash scripts/termux-instalar.sh
 ```
 
-O `termux-instalar.sh` atualiza os pacotes do Termux, instala `python`, `python-pip` e `git`, instala as bibliotecas do `requirements.txt` e cria o `celular_servidor/config_servidor.json` a partir do exemplo, se ele ainda não existir. Pode levar alguns minutos.
+O `termux-instalar.sh` atualiza os pacotes do Termux, instala `python`, `python-pip`, `git` e o `python-cryptography` (que a lâmpada usa e o pip não compila no celular), instala as bibliotecas do `requirements.txt` e cria o `celular_servidor/config_servidor.json` a partir do exemplo, se ele ainda não existir. Pode levar alguns minutos.
 
 O repositório é público, então o `git clone` não pede senha. Se um dia ele virar privado, o Git vai pedir o usuário do GitHub e, no lugar da senha, um token de acesso pessoal.
 
@@ -279,9 +349,10 @@ Os testes não chamam nenhuma API real. O LLM, a transcrição e a lista de mode
 - a última rodada de ferramenta só aceita texto, e a mesma chamada repetida não abre o programa de novo;
 - remoção dos blocos `<think>` da resposta, inclusive sem abertura ou sem fechamento;
 - mensagens em português para erros da API, queda da rede, PC desligado, servidor fora do ar e configuração ausente ou com valor errado;
+- a lâmpada: conferência do bloco `lampada`, tradução dos pedidos para os comandos da Tuya e dos erros para o português, e o `tinytuya` de verdade falando com uma lâmpada falsa em `127.0.0.1` nos protocolos 3.3, 3.4 e 3.5, inclusive com chave ou versão erradas e com a lâmpada desligada;
 - o diagnóstico `verificar.py`, os scripts do Termux e o `iniciar_agente.bat`.
 
-Os testes copiam o código para uma pasta temporária com configs próprios, então nunca leem nem alteram os seus `config_*.json`. Passam no Windows e no Linux. Alguns são de uma plataforma só e aparecem como `skipped` nas outras: o `.bat` só roda no Windows; os scripts do Termux e os dois testes que sobem o agente em `0.0.0.0` (Ctrl+C e porta ocupada), só no Linux, para não acionar o firewall do Windows; o JavaScript da página, só com o Node instalado. Sem Flask, os testes do servidor e do diagnóstico também aparecem como `skipped`: instale o `requirements.txt` para rodá-los.
+Os testes copiam o código para uma pasta temporária com configs próprios, então nunca leem nem alteram os seus `config_*.json`. Passam no Windows e no Linux. Alguns são de uma plataforma só e aparecem como `skipped` nas outras: o `.bat` só roda no Windows; os scripts do Termux e os dois testes que sobem o agente em `0.0.0.0` (Ctrl+C e porta ocupada), só no Linux, para não acionar o firewall do Windows; o JavaScript da página, só com o Node instalado; os testes com a lâmpada falsa, só com o `tinytuya` instalado. Sem Flask, os testes do servidor e do diagnóstico também aparecem como `skipped`: instale o `requirements.txt` para rodá-los.
 
 ## Solução de problemas
 
@@ -326,6 +397,19 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **A transcrição mostra frases que você não disse** (por exemplo "Legendas pela comunidade Amara.org"): o Whisper inventa texto quando o áudio sai quase mudo. Segure o botão durante toda a fala e fale mais perto do microfone.
 - **Aparece texto de raciocínio na resposta**: o servidor remove os blocos `<think>`. Se ainda aparecer, o backend usa outro formato; com Ollama, atualize para uma versão recente.
 
+### Lâmpada
+
+- **"A lâmpada não respondeu: confira se o interruptor dela está ligado..."**: a lâmpada está desligada no interruptor, fora da rede ou com outro IP. Rode `python -m tinytuya scan`, compare o IP com o do config e reserve o IP no roteador.
+- **"A lâmpada não aceitou a conexão..."**: além de desligada, acontece com a `versao` errada (uma lâmpada 3.5 configurada como 3.3, por exemplo). Use a `Version` que o scan mostra.
+- **"A lâmpada recusou a conexão: confira a "chave_local" e a "versao"..."**: confira primeiro a `versao`, que dá essa mesma mensagem quando está errada (uma lâmpada 3.4 configurada como 3.3, ou o contrário): use a `Version` do scan. Se a versão estiver certa, a chave está errada ou mudou porque a lâmpada foi pareada de novo no app: rode o wizard outra vez e copie a `key` nova do `devices.json`.
+- **"Falta preencher ... no bloco "lampada""**: complete os dados, como em [Preencha o bloco da lâmpada](#4-preencha-o-bloco-da-lâmpada), ou apague o bloco se não tiver lâmpada.
+- **'"chave_local" da lâmpada precisa ter 16 caracteres'** (ou `"id"`, `"ip"`, `"versao"`): o valor veio com o formato errado. Copie de novo do `devices.json` ou do scan.
+- **"Falta a biblioteca tinytuya"** ou **`No module named tinytuya`**: o comando rodou fora do ambiente virtual, ou o `requirements.txt` não foi instalado de novo depois de atualizar. Ative o `.venv` e rode `pip install -r celular_servidor/requirements.txt`. No Termux, rode `bash scripts/termux-instalar.sh`, que instala também o `python-cryptography`.
+- **O scan não mostra a lâmpada**: confira se ela está ligada e se o PC está na mesma rede Wi-Fi. No Windows, a rede precisa estar como privada e o Python liberado no firewall em redes privadas; no Linux, o firewall precisa liberar as portas UDP 6666, 6667 e 7000, como em [Descubra o IP e a versão](#3-descubra-o-ip-e-a-versão-em-casa).
+- **O wizard não lista a lâmpada ou dá erro de permissão**: a conta do app não está vinculada ao projeto, a região está errada (tente `us-e`, como explica o [passo do wizard](#2-pegue-o-id-e-a-chave-local-uma-vez)) ou o teste do IoT Core venceu (renove em **Cloud → Cloud Services** na plataforma).
+- **"Este modelo de lâmpada usa outros comandos"**: a lâmpada não segue o padrão das lâmpadas Tuya mais comuns (os comandos 20 a 24), o único que o servidor sabe mandar por enquanto.
+- **"Branco quente" sai frio, ou o contrário**: alguns modelos invertem a escala de temperatura. Troque os valores de `branco quente` e `branco frio` em `celular_servidor/lampada.py`.
+
 ### Página, Termux e instalação
 
 - **"Sem conexão com o servidor do celular"** na página: o servidor parou (a mensagem fala em celular, mas vale para qualquer aparelho). No modo notebook, veja o erro no terminal onde você rodou `python servidor.py` e rode de novo; no celular, rode `bash scripts/termux-iniciar.sh` de novo.
@@ -337,6 +421,7 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **"O servidor já está rodando em outra sessão do Termux"**: use a sessão que já está aberta ou pare o servidor dela com Ctrl+C antes de rodar o `termux-iniciar.sh` de novo.
 - **"Não encontrei o Python. Rode antes: bash scripts/termux-instalar.sh"** ou **"Falta a biblioteca ..."**: a instalação não foi feita (ou, no PC, o `.venv` não está ativado). Rode o que a mensagem pede.
 - **"O diagnóstico não terminou"** ou **"O diagnóstico parou por um erro inesperado"**: o `verificar.py` quebrou antes do fim; o detalhe técnico vem na mensagem. O `termux-iniciar.sh` não sobe o servidor nesse caso.
+- **Erro ao instalar o `cryptography` no Termux**: o `tinytuya` precisa dele, e o pip não consegue compilá-lo no celular. Rode `pkg install python-cryptography` (o `termux-instalar.sh` já faz isso) e instale de novo.
 - **`pip: command not found` no Termux**: o pip é um pacote separado; rode `pkg install python-pip` ou o `termux-instalar.sh`.
 - **"WARNING: The C extension could not be compiled" ao instalar no Termux**: é o MarkupSafe (dependência do Flask) sem compilador. Ele instala a versão em Python puro e funciona normalmente.
 - **"Não encontrei o Python neste PC"** (no `.bat`) ou **"Python não foi encontrado; executar sem argumentos para instalar do Microsoft Store"**: o Python não está instalado ou não está no PATH. Instale pelo python.org, como em [Requisitos](#requisitos).
