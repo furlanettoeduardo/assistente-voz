@@ -81,12 +81,12 @@ Mudanças previstas no contrato:
 
 ## Fases
 
-### v0.1a: abrir programas (concluída no notebook; falta confirmar a voz)
+### v0.1a: abrir programas (concluída no notebook)
 
 - [x] Rodar o agente no PC com token e lista de programas
 - [x] Criar a chave do Groq e confirmar o nome do modelo Qwen com suporte a tool calling
 - [x] Testar o servidor no notebook por texto, com o agente abrindo programas
-- [ ] Testar o servidor no notebook por voz (botão da página)
+- [x] Testar o servidor no notebook por voz (botão da página)
 
 ### Correções e diagnóstico (concluído)
 
@@ -114,6 +114,7 @@ Com a v0.1a e a v0.1b prontas, o MVP está completo.
 - [ ] Ligar o PC com Wake-on-LAN antes de abrir um programa
 - [ ] Bloquear ou desligar o PC, com confirmação por voz
 - [ ] Perguntar horário e previsão do tempo
+- [ ] Tocar músicas no Spotify por voz: uma ferramenta `tocar_musica(busca)` no servidor, que procura pela API do Spotify e toca no app aberto no PC (precisa de conta Premium e de um app no painel de desenvolvedor do Spotify; sem Premium, dá só para abrir o Spotify já na busca)
 
 ### v0.3: voz gerada no servidor, memória curta e streaming
 
