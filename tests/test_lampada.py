@@ -81,7 +81,8 @@ class TestComandos(unittest.TestCase):
         self.assertEqual(feito, "deixei a lâmpada em vermelho com 30% de brilho")
 
     def test_brancos_usam_a_temperatura(self):
-        for cor, temperatura in (("branco quente", 0), ("branco frio", 1000), ("branco", 500)):
+        for cor, temperatura in (("branco", 1000), ("branco frio", 1000), ("branco neutro", 500),
+                                 ("branco quente", 0)):
             with self.subTest(cor=cor):
                 comando, _ = lampada.montar_comando(COR, cor=cor)  # vindo do azul com 40%: mantém 40%
                 self.assertEqual(comando, {"20": True, "21": "white", "22": 400, "23": temperatura})

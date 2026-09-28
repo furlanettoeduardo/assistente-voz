@@ -161,7 +161,7 @@ O `verificar.py` confere tudo o que o servidor precisa (veja [Diagnóstico](#dia
 
 ## Lâmpada (opcional)
 
-O servidor controla uma lâmpada Tuya, como a Elgin Smart Color, direto pela rede de casa, com a biblioteca `tinytuya`: os comandos não passam pela nuvem nem pelo app. Dá para falar "acende a luz", "apaga a luz", "deixa a luz azul" ou "diminui a luz para 30%". As cores são branco, branco quente, branco frio, vermelho, laranja, amarelo, verde, ciano, azul, roxo e rosa; o brilho vai de 1% a 100%. Sem lâmpada configurada, o resto funciona normalmente.
+O servidor controla uma lâmpada Tuya, como a Elgin Smart Color, direto pela rede de casa, com a biblioteca `tinytuya`: os comandos não passam pela nuvem nem pelo app. Dá para falar "acende a luz", "apaga a luz", "deixa a luz azul" ou "diminui a luz para 30%". As cores são branco (o branco puro), branco neutro, branco quente (amarelado), vermelho, laranja, amarelo, verde, ciano, azul, roxo e rosa; o brilho vai de 1% a 100%. Sem lâmpada configurada, o resto funciona normalmente.
 
 Para falar com a lâmpada, o servidor precisa de quatro dados dela: o `id`, a `chave_local` (a senha que ela usa na rede), o `ip` e a `versao` do protocolo. Se você instalou o servidor antes desta versão, instale de novo o `requirements.txt`, que agora traz o `tinytuya`. Os comandos abaixo usam o Python do ambiente virtual: ative o `.venv` antes (ou chame o Python dele direto, como `.venv\Scripts\python.exe -m tinytuya wizard`).
 
@@ -408,7 +408,7 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **O scan não mostra a lâmpada**: confira se ela está ligada e se o PC está na mesma rede Wi-Fi. No Windows, a rede precisa estar como privada e o Python liberado no firewall em redes privadas; no Linux, o firewall precisa liberar as portas UDP 6666, 6667 e 7000, como em [Descubra o IP e a versão](#3-descubra-o-ip-e-a-versão-em-casa).
 - **O wizard não lista a lâmpada ou dá erro de permissão**: a conta do app não está vinculada ao projeto, a região está errada (tente `us-e`, como explica o [passo do wizard](#2-pegue-o-id-e-a-chave-local-uma-vez)) ou o teste do IoT Core venceu (renove em **Cloud → Cloud Services** na plataforma).
 - **"Este modelo de lâmpada usa outros comandos"**: a lâmpada não segue o padrão das lâmpadas Tuya mais comuns (os comandos 20 a 24), o único que o servidor sabe mandar por enquanto.
-- **"Branco quente" sai frio, ou o contrário**: alguns modelos invertem a escala de temperatura. Troque os valores de `branco quente` e `branco frio` em `celular_servidor/lampada.py`.
+- **O branco sai amarelado e o "branco quente" sai azulado**: alguns modelos invertem a escala de temperatura. Troque os valores dos brancos em `BRANCOS`, no `celular_servidor/lampada.py` (0 e 1000 trocam de lugar).
 
 ### Página, Termux e instalação
 

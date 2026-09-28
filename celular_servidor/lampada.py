@@ -13,8 +13,9 @@ import threading
 
 # Cores que o LLM pode escolher. Os brancos usam o modo "white" com a temperatura do DP 23
 # (0 = quente, 1000 = frio, o padrão da Tuya); as outras usam o modo "colour" com matiz em graus
-# e saturação de 0 a 1000.
-BRANCOS = {"branco": 500, "branco quente": 0, "branco frio": 1000}
+# e saturação de 0 a 1000. O "branco" é o branco puro, sem nada de amarelo; "branco frio" fica
+# como outro nome dele, para o LLM não ter de escolher.
+BRANCOS = {"branco": 1000, "branco neutro": 500, "branco quente": 0, "branco frio": 1000}
 CORES = {"vermelho": (0, 1000), "laranja": (30, 1000), "amarelo": (55, 1000), "verde": (120, 1000),
          "ciano": (180, 1000), "azul": (240, 1000), "roxo": (275, 1000), "rosa": (330, 700)}
 NOMES_DAS_CORES = [*BRANCOS, *CORES]

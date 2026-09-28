@@ -219,7 +219,9 @@ FERRAMENTA_LAMPADA = {
                 "ligar": {"type": "boolean", "description": "true para ligar, false para desligar."},
                 "brilho": {"type": "integer", "minimum": 1, "maximum": 100,
                            "description": "Brilho em porcentagem, de 1 a 100."},
-                "cor": {"type": "string", "enum": lampada.NOMES_DAS_CORES, "description": "Cor da luz."},
+                "cor": {"type": "string", "enum": lampada.NOMES_DAS_CORES,
+                        "description": "Cor da luz. Para luz branca, use branco (o branco puro); branco quente "
+                                       "é amarelado e só vale quando o usuário pedir luz quente ou amarelada."},
             },
         },
     },

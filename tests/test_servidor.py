@@ -402,7 +402,7 @@ class TestServidor(unittest.TestCase):
                  ({"brilho": "muito"}, "o brilho precisa ser um número de 1 a 100"),
                  ({"brilho": True}, "o brilho precisa ser um número de 1 a 100"),
                  ({"brilho": float("inf")}, "o brilho precisa ser um número de 1 a 100"),  # o JSON aceita 1e999
-                 ({"cor": "dourado"}, "não conheço a cor dourado; posso usar: branco, branco quente")]
+                 ({"cor": "dourado"}, "não conheço a cor dourado; posso usar: branco, branco neutro, branco quente")]
         for argumentos, erro in casos:
             with self.subTest(argumentos=argumentos):
                 resultado = self.servidor.controlar_lampada(argumentos)
