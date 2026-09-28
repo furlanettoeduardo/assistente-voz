@@ -22,10 +22,12 @@ echo "==> Atualizando os pacotes do Termux (pode levar alguns minutos)"
 pkg update
 pkg upgrade "${SEM_PERGUNTAS[@]}"
 
-echo "==> Instalando python, pip e git"
-pkg install "${SEM_PERGUNTAS[@]}" python python-pip git
+echo "==> Instalando python, pip, git e a criptografia usada pela lâmpada"
+# python-cryptography vem pronto do Termux: pelo pip, a cryptography não tem versão para Android e
+# tentaria compilar com Rust.
+pkg install "${SEM_PERGUNTAS[@]}" python python-pip python-cryptography git
 
-echo "==> Instalando as bibliotecas do servidor (Flask e requests)"
+echo "==> Instalando as bibliotecas do servidor (Flask, requests e tinytuya)"
 python -m pip install -r "$SERVIDOR/requirements.txt"
 
 if [ -f "$CONFIG" ]; then

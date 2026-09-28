@@ -96,7 +96,7 @@ class TestScriptsDoTermux(unittest.TestCase):
         self.assertEqual(self.chamadas(), [
             "pkg update",
             f"pkg upgrade {sem_perguntas}",
-            f"pkg install {sem_perguntas} python python-pip git",
+            f"pkg install {sem_perguntas} python python-pip python-cryptography git",
             f"python -m pip install -r {self.raiz}/celular_servidor/requirements.txt",
         ])
 
