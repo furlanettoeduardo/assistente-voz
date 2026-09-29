@@ -56,7 +56,7 @@ Os satélites vão falar com o cérebro pelo endpoint que a página já usa hoje
 
 Mudanças previstas no contrato:
 
-- gerar a voz de resposta no servidor, com o Piper, e devolver o áudio junto com o texto;
+- a voz de resposta gerada no servidor, com o Piper, já sai no campo opcional `audio` da resposta: um WAV (16 bits, mono, 22.050 Hz) em base64, que só vem quando a voz do servidor está ligada. Para o ESP32, pode valer um endpoint que devolva o WAV direto, sem base64;
 - aceitar WAV 16 kHz, o formato natural do ESP32 (o servidor já repassa `audio/wav` ao Groq, mas ainda não foi testado com o áudio de um satélite);
 - exigir token dos satélites quando o servidor aceitar conexões da rede (hoje o servidor não pede token em nenhum caso; por isso, por padrão, escuta só em `127.0.0.1`).
 
@@ -76,7 +76,7 @@ Mudanças previstas no contrato:
 | Agente no PC | `agente.py`, Python puro (biblioteca padrão), aberto pelo `iniciar_agente.bat` | Instalado (PyInstaller + Inno Setup), em segundo plano, com ícone na bandeja |
 | Transcrição | Whisper no Groq | Whisper no Groq |
 | LLM | Qwen no Groq (ou Ollama, trocando só a configuração) | Qwen no Groq (ou Ollama) |
-| Voz de resposta | `speechSynthesis` do navegador | Piper no servidor, com o áudio devolvido pelo `/voz` |
+| Voz de resposta | Piper no servidor (`pt_BR-cadu-medium`), com o `speechSynthesis` do navegador como reserva | Piper no servidor, com o áudio devolvido pelo `/voz` |
 | Lâmpada | Elgin Smart Color + `tinytuya` (v0.1b) | Elgin Smart Color + `tinytuya` |
 | Acesso de fora de casa | Nenhum | Tailscale |
 
@@ -124,7 +124,7 @@ Com a v0.1a e a v0.1b prontas, o MVP está completo.
 
 ### v0.3: voz gerada no servidor, memória curta e streaming
 
-- [ ] Gerar a voz de resposta no servidor com o Piper (vozes pt-BR mais naturais) e devolver o áudio junto com o texto no `/voz`
+- [x] Gerar a voz de resposta no servidor com o Piper (vozes pt-BR mais naturais) e devolver o áudio junto com o texto no `/voz` (piper-tts 1.7.0, voz `pt_BR-cadu-medium`, opcional; sem ele, vale a voz do navegador)
 - [x] Manter um histórico curto da conversa para entender "agora apaga ela" (os últimos 4 pedidos de cada conversa, por até 5 minutos parada; a página manda um id por aba)
 - [ ] Reduzir a latência com respostas em streaming
 

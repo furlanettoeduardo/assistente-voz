@@ -2,7 +2,7 @@
 
 Você segura o botão de falar numa página e pede: "abre a calculadora", "fecha o chrome", "volume em 30", "acende a luz", "vai chover amanhã?" ou "toca Legião Urbana". Por enquanto, tudo roda no mesmo notebook. A lista completa está em [O que dá para pedir](#o-que-dá-para-pedir).
 
-**Onde o projeto está:** as fases v0.1 (abrir programas e lâmpada) e v0.2 (fechar programas, volume, bloquear e desligar o PC, hora, previsão do tempo e Spotify) estão prontas e testadas por voz no notebook. A próxima é a v0.3: voz gerada no servidor, memória curta da conversa e respostas mais rápidas. O plano completo está no [roadmap.md](roadmap.md).
+**Onde o projeto está:** as fases v0.1 (abrir programas e lâmpada) e v0.2 (fechar programas, volume, bloquear e desligar o PC, hora, previsão do tempo e Spotify) estão prontas e testadas por voz no notebook. Da v0.3, já estão prontas a memória curta da conversa e a voz gerada no servidor com o Piper; falta deixar as respostas mais rápidas. O plano completo está no [roadmap.md](roadmap.md).
 
 O projeto tem duas partes:
 
@@ -135,6 +135,7 @@ No Windows, `["cmd", "/c", "start", "", "nome"]` funciona para a maioria dos pro
 | `pc_mac` e `pc_broadcast` | Opcionais. Para ligar o PC pela rede, como explica [Wake-on-LAN](#ligar-o-pc-pela-rede-wake-on-lan-opcional). Vazios, a assistente não liga o PC. |
 | `host` e `porta` | Onde o servidor escuta. Padrão: `127.0.0.1:8000`, só o próprio aparelho acessa. |
 | `cidade` | Opcional. A cidade da [previsão do tempo](#previsão-do-tempo) quando você não diz outra, como `"Curitiba, PR"`. |
+| `voz` | Opcional. A voz do Piper que fala as respostas, como `"pt_BR-cadu-medium"`, como explica [Voz do servidor](#voz-do-servidor-opcional). Sem ela, vale a voz do navegador. |
 | `lampada` | Opcional. `id`, `chave_local`, `ip` e `versao` da lâmpada Tuya, como explica [Lâmpada](#lâmpada-opcional). Sem lâmpada, apague o bloco. |
 | `spotify` | Opcional. `client_id` do app do Spotify e, se quiser, `dispositivo`, como explica [Spotify](#spotify-opcional-conta-premium). |
 
@@ -307,6 +308,25 @@ Suba o servidor de novo: ele mostra `[servidor] Spotify conectado.`, e o `verifi
 
 A autorização dura 6 meses; depois, rode o `spotify_conectar.py` de novo. Se o Spotify estiver fechado no PC e `"spotify"` estiver na lista de programas do agente, a assistente abre o aplicativo e tenta de novo por uns 15 segundos. Para usar outra conta além da dona do app, adicione-a antes em **Settings → Users Management** (até 5 contas).
 
+## Voz do servidor (opcional)
+
+Por padrão, quem fala a resposta é a voz do próprio navegador. Com o Piper, o servidor gera uma voz em português mais natural e manda o áudio junto com o texto; é o que vai deixar os satélites da visão final falarem. Não funciona no Termux (não há como instalar o Piper no Android): lá vale sempre a voz do navegador, e o servidor avisa isso ao subir.
+
+No PC (ou no Raspberry Pi), com o ambiente virtual ativado:
+
+```
+cd celular_servidor
+pip install -r requirements-voz.txt
+python -m piper.download_voices pt_BR-cadu-medium --data-dir vozes
+```
+
+O segundo comando baixa a voz (cerca de 60 MB) para a pasta `celular_servidor\vozes`, que fica fora do Git. Depois, confira se o `config_servidor.json` tem `"voz": "pt_BR-cadu-medium"` e suba o servidor de novo: ele mostra `[servidor] voz: pt_BR-cadu-medium, gerada no servidor.`, e o `verificar.py` confere a voz no passo 10.
+
+- **As vozes em português:** `pt_BR-cadu-medium` (a padrão, a mais bem entendida nos testes), `pt_BR-faber-medium` (fala um pouco mais rápido) e `pt_BR-jeff-medium`. Para trocar, baixe a outra voz com o mesmo comando e mude `"voz"`. As amostras oficiais estão em [huggingface.co/rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
+- **Licenças:** nenhuma voz proíbe uso pessoal, e o Piper se diz feito para uso pessoal e pesquisa. Os dados das vozes em português são de domínio público (CC0), mas elas foram treinadas a partir de uma voz inglesa (lessac) cuja licença só libera pesquisa: em casa o risco é baixo, mas não há permissão explícita, e uso comercial seria arriscado. O `piper-tts` é GPL-3.0-or-later.
+- **A versão fica fixada em 1.7.0:** a 1.8.0 é bloqueada pelo Smart App Control do Windows, e para gerar voz as duas são iguais. O servidor faz uma síntese de teste ao subir; se algo falhar, ele avisa no terminal e a página continua com a voz do navegador.
+- Antes de falar, o servidor ajusta o texto do jeito que o Piper lê melhor: "10h33" vira "10 horas e 33", "22°C" vira "22 graus", "R$ 12,50" vira "12 reais e 50 centavos", e emojis e markdown saem.
+
 ## Ligar o PC pela rede (Wake-on-LAN, opcional)
 
 Só faz sentido com o servidor em outro aparelho (o celular ou, no futuro, o Raspberry Pi): no modo notebook, o servidor desliga junto com o PC. Com o PC desligado e `pc_mac` preenchido, a assistente manda o "pacote mágico" pela rede e espera o agente responder por até 90 segundos antes de abrir o programa.
@@ -339,7 +359,8 @@ Ele confere, em ordem, e explica em português o que falhou e como resolver:
 6. o agente aceita o `pc_token` (e mostra o que ele libera: programas, o que fecha e as ações);
 7. a lâmpada responde, se houver uma configurada;
 8. a previsão do tempo responde para a `cidade`, se houver uma;
-9. o Spotify está conectado, se estiver configurado.
+9. o Spotify está conectado, se estiver configurado;
+10. a voz do servidor gera áudio, se estiver configurada.
 
 Para testar as chaves, ele só pede a lista de modelos da API: não grava áudio nem gasta tokens. Ele termina com código 0 quando está tudo certo, 1 quando há problemas mas o servidor consegue subir, 2 quando o servidor nem sobe, 3 quando o próprio diagnóstico quebra e 130 quando é interrompido com Ctrl+C. As dicas mostram o caminho completo dos arquivos, então funcionam de qualquer pasta.
 
@@ -447,6 +468,7 @@ Os testes não chamam nenhuma API real. O LLM, a transcrição e a lista de mode
 - a lâmpada: conferência do bloco `lampada`, tradução dos pedidos para os comandos da Tuya e dos erros para o português, e o `tinytuya` de verdade falando com uma lâmpada falsa em `127.0.0.1` nos protocolos 3.3, 3.4 e 3.5, inclusive com chave ou versão erradas e com a lâmpada desligada;
 - fechar programas, volume, bloquear e desligar o PC: os comandos exatos do Windows e do Linux (taskkill, tasklist, pkill, wpctl, pactl, shutdown), com as funções que mexem no PC trocadas por mocks. Nenhum teste muda o volume, bloqueia a tela ou desliga nada; no Windows, só uma leitura do volume real;
 - a confirmação por voz antes de desligar: o que conta como "sim" e como "não", a pergunta que vence e que vale uma vez só;
+- a memória curta (o LLM vê os últimos pedidos da mesma conversa, e só dela) e a voz do servidor, com um Piper falso: o texto ajustado para a fala, o áudio na resposta e o servidor seguindo sem voz quando o Piper falha. Com o piper-tts e a voz instalados, um teste gera um áudio de verdade (sem tocar);
 - o Wake-on-LAN, a previsão do tempo (com um Open-Meteo falso) e o Spotify (com uma API falsa: renovação do token, busca, escolha do computador, erros de Premium e de cota, e o `spotify_conectar.py` de ponta a ponta);
 - o diagnóstico `verificar.py`, os scripts do Termux e o `iniciar_agente.bat`.
 
@@ -533,6 +555,16 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **"INVALID_CLIENT: Invalid redirect URI"** na página do Spotify: a Redirect URI do app no painel precisa ser exatamente `http://127.0.0.1:8888/callback`. Corrija em Settings, salve e rode o `spotify_conectar.py` de novo.
 - **A porta 8888 está ocupada** ao conectar: feche o programa que a usa ou rode `python spotify_conectar.py --colar`.
 - **"a cota do app do Spotify acabou por enquanto"** ou **"o Spotify pediu para esperar um pouco"**: espere alguns minutos.
+
+### Voz do servidor
+
+- **"voz do servidor desligada, vale a do navegador: falta o piper-tts"**: instale com `pip install -r requirements-voz.txt`, na pasta `celular_servidor` e com o ambiente virtual ativado. No Termux não há como: lá vale a voz do navegador.
+- **"não achei a voz ... em ...vozes"**: baixe a voz com `python -m piper.download_voices pt_BR-cadu-medium --data-dir vozes`, na pasta `celular_servidor`.
+- **"o Windows bloqueou uma parte do Piper (Smart App Control)"**: confira se o piper-tts instalado é o 1.7.0, o do `requirements-voz.txt` (`pip install -r requirements-voz.txt` volta para ele). A liberação do Windows depende da reputação do arquivo e pode mudar; enquanto isso, a página usa a voz do navegador.
+- **"não consegui carregar a voz ... --force-redownload"**: o download foi interrompido. Rode o comando de baixar a voz de novo, com `--force-redownload` no fim.
+- **"falta no Windows o Microsoft Visual C++ Redistributable (x64)"**: instale o `vc_redist.x64` do site da Microsoft e suba o servidor de novo.
+- **"o Piper não funciona com acento no caminho da pasta"**: o servidor usa o caminho curto do Windows para contornar isso; se o disco não tiver caminhos curtos, mova o projeto (ou o ambiente virtual) para uma pasta sem acento.
+- **A página fala com a voz do navegador mesmo com a voz do servidor ligada**: o navegador pode bloquear o áudio se a página não recebeu um toque ou clique antes. Use o botão de falar ou o campo de texto, que contam como interação.
 
 ### Página, Termux e instalação
 
