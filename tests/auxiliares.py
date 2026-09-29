@@ -25,13 +25,14 @@ _contador = itertools.count()
 
 def _fora_da_copia(pasta: str, nomes: list[str]) -> list[str]:
     """
-    Caches, ambientes virtuais e configs reais, inclusive cópias como "config_agente (1).json"
-    (os mesmos do .gitignore). Um .venv dentro da pasta deixaria cada cópia lenta.
+    Caches, ambientes virtuais, configs reais, inclusive cópias como "config_agente (1).json", e o
+    token do Spotify (os mesmos do .gitignore). Um .venv dentro da pasta deixaria cada cópia lenta.
     """
     exemplos = {"config_agente.example.json", "config_servidor.example.json"}
     return [nome for nome in nomes if nome in {"__pycache__", ".venv", "venv"} or (
         nome not in exemplos and (fnmatch.fnmatch(nome, "config_agente*.json*")
-                                  or fnmatch.fnmatch(nome, "config_servidor*.json*")))]
+                                  or fnmatch.fnmatch(nome, "config_servidor*.json*")
+                                  or fnmatch.fnmatch(nome, "spotify_token*.json*")))]
 
 
 def copiar_componente(pasta: Path, destino: Path) -> Path:
@@ -56,7 +57,8 @@ def importar_copia(pasta: Path, modulo: str):
     spec = importlib.util.spec_from_file_location(nome, pasta / f"{modulo}.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[nome] = mod  # o Flask procura o módulo aqui para achar a pasta static
-    sys.modules.pop("lampada", None)  # o "import lampada" do servidor precisa achar o desta cópia
+    for vizinho in ("lampada", "sistema", "tempo", "spotify"):  # os imports da cópia precisam achar os dela
+        sys.modules.pop(vizinho, None)
     sys.path.insert(0, str(pasta))
     try:
         spec.loader.exec_module(mod)
@@ -83,10 +85,13 @@ class ServidorLocal:
         self._thread.join(timeout=5)
 
 
-def iniciar_agente(destino: Path, token: str, programas: dict):
-    """Carrega uma cópia do agente com o config dado e o põe para escutar em 127.0.0.1."""
+def iniciar_agente(destino: Path, token: str, programas: dict, **extra):
+    """
+    Carrega uma cópia do agente com o config dado e o põe para escutar em 127.0.0.1. `extra`
+    acrescenta chaves ao config, como "fechar" e "acoes".
+    """
     agente = carregar_componente(PASTA_AGENTE, "agente", "config_agente.json",
-                                 {"token": token, "porta": 0, "programas": programas}, destino)
+                                 {"token": token, "porta": 0, "programas": programas, **extra}, destino)
     return agente, ServidorLocal(agente.Handler)
 
 

@@ -7,5 +7,12 @@
     "explorador de arquivos": ["explorer.exe"],
     "chrome": ["cmd", "/c", "start", "", "chrome"],
     "spotify": ["cmd", "/c", "start", "", "spotify:"]
-  }
+  },
+  "fechar": {
+    "bloco de notas": "notepad.exe",
+    "calculadora": "CalculatorApp.exe",
+    "chrome": "chrome.exe",
+    "spotify": "Spotify.exe"
+  },
+  "acoes": ["volume", "bloquear", "desligar"]
 }
