@@ -228,7 +228,9 @@ class TestFerramentasDoPC(unittest.TestCase):
     def test_o_que_conta_como_sim_e_como_nao(self):
         casos = {"Sim.": True, "SIM!": True, "sim, pode desligar o computador": True, "Pode.": True,
                  "confirmo": True, "Não.": False, "não, deixa": False, "cancela": False,
-                 "não, obrigado": False, "deixa pra lá": False,
+                 "não, obrigado": False, "deixa pra lá": False, "Tá bom.": True, "ok": True, "beleza": True,
+                 "claro que sim": True, "isso mesmo": True, "sim, obrigado": True, "desliga o PC": True,
+                 "desliga a luz": None,
                  "sim, e abre o chrome": None, "abre o chrome": None, "": None, "pode abrir o spotify": None,
                  "deixa a luz azul": None, "deixa o volume em 20": None, "espera, qual a previsão para amanhã?": None,
                  "sim, não tem problema": None}

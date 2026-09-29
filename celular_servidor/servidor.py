@@ -477,12 +477,15 @@ def guardar_pedido(conversa: str, mensagens: list[dict]) -> None:
 CONFIRMACAO_SEGUNDOS = 30
 _pendentes: dict = {}  # conversa -> {"acao": "desligar", "ate": instante em que a pergunta vence}
 _trava_pendente = threading.Lock()
-PALAVRAS_SIM = {"sim", "confirmo", "confirma", "pode", "isso", "claro"}
+PERGUNTA_DESLIGAR = "Quer mesmo desligar o PC? Diga sim para confirmar."
+PALAVRAS_SIM = {"sim", "confirmo", "confirma", "pode", "isso", "claro", "ok", "ta", "beleza", "certo", "aham",
+                "desliga", "manda", "positivo"}
 PALAVRAS_NAO = {"nao", "cancela", "cancelar", "deixa", "esquece", "espera"}
 # Só frases curtas contam: "sim, pode desligar o computador" confirma e "não, obrigado" recusa, mas "sim, e abre
 # o chrome" ou "deixa a luz azul" são outros pedidos e seguem para o LLM.
-PALAVRAS_DA_CONFIRMACAO = PALAVRAS_SIM | {"desligar", "desliga", "o", "pc", "computador", "por", "favor", "quero",
-                                          "tenho", "certeza", "confirmado", "ser", "agora"}
+PALAVRAS_DA_CONFIRMACAO = PALAVRAS_SIM | {"desligar", "o", "pc", "computador", "por", "favor", "quero", "tenho",
+                                          "certeza", "confirmado", "ser", "agora", "bom", "mesmo", "que", "obrigado",
+                                          "obrigada", "ja", "logo"}
 PALAVRAS_DA_RECUSA = PALAVRAS_NAO | {"o", "pc", "computador", "desligar", "desliga", "desligamento", "pra", "pa",
                                      "la", "obrigado", "obrigada", "precisa", "quero", "mais", "tarde", "isso"}
 
@@ -531,7 +534,7 @@ def energia_do_pc(args: dict, pc: dict) -> dict:
         return {"erro": "desligar o PC não está liberado no config_agente.json do PC"}
     # Quem desliga é o próximo pedido, se for um "sim". A pergunta é guardada em conversar, que a devolve
     # sem passar pelo LLM: um "sim" só pode valer para uma pergunta que a pessoa ouviu do jeito que está aqui.
-    return {"confirmar": True, "pergunta": "Quer mesmo desligar o PC? Diga sim para confirmar."}
+    return {"confirmar": True, "pergunta": PERGUNTA_DESLIGAR}
 
 
 def cumprir_pendente(acao: str, confirmou: bool) -> tuple[str, list[dict]]:
@@ -722,6 +725,11 @@ def conversar(texto_usuario: str, conversa: str = CONVERSA_PADRAO) -> tuple[str,
         sistema += " O computador está desligado ou inacessível agora; avise se pedirem algo nele."
         if pc["fora_do_ar"] and PC_MAC:
             sistema += " Se pedirem algo no computador, ligue-o antes com a ferramenta ligar_pc."
+    if historico and PERGUNTA_DESLIGAR in (historico[-1].get("content") or ""):
+        # A pergunta venceu ou a resposta não foi um "sim" curto: sem este aviso, o LLM lê a resposta como
+        # confirmação e diz que vai desligar, sem desligar nada.
+        sistema += (" A pergunta de desligar o PC que aparece na conversa não vale mais: se o usuário quiser "
+                    "desligar, chame energia_do_pc de novo. Nunca diga que o PC vai desligar sem chamar a ferramenta.")
 
     mensagens = [{"role": "system", "content": sistema}, *historico, {"role": "user", "content": texto_usuario}]
     inicio = len(mensagens) - 1  # daqui em diante é este pedido, que vai para a memória

@@ -126,6 +126,27 @@ class TestMemoria(unittest.TestCase):
         self.assertIn("sim", conteudos)
         self.assertTrue(any(c and c.startswith("Tudo bem, o PC vai desligar") for c in conteudos))
 
+    def test_pergunta_vencida_nao_vira_confirmacao_no_llm(self):
+        # Com a pergunta de desligar no histórico e o prazo vencido, o LLM é avisado de que ela não vale mais.
+        self.llm.programar(resposta_ferramenta("c1", "energia_do_pc", {"acao": "desligar"}),
+                           resposta_texto("Para desligar, peça de novo."))
+        with mock.patch.object(self.servidor, "CONFIRMACAO_SEGUNDOS", -1):
+            self.enviar("desliga o pc")
+        self.enviar("sim")
+        self.sistema.desligar.assert_not_called()
+        sistema = self.llm.pedidos_de_chat()[-1]["json"]["messages"][0]["content"]
+        self.assertIn("A pergunta de desligar o PC que aparece na conversa não vale mais", sistema)
+        self.llm.programar(resposta_texto("Oi."))
+        self.enviar("oi")  # a última resposta já não é a pergunta: o aviso some
+        self.assertNotIn("não vale mais", self.llm.pedidos_de_chat()[-1]["json"]["messages"][0]["content"])
+
+    def test_ta_bom_confirma(self):
+        self.llm.programar(resposta_ferramenta("c1", "energia_do_pc", {"acao": "desligar"}))
+        self.enviar("desliga o pc")
+        dados = self.enviar("Tá bom.")
+        self.sistema.desligar.assert_called_once_with()
+        self.assertTrue(dados["resposta"].startswith("Tudo bem, o PC vai desligar"))
+
     def test_id_de_conversa_estranho_vira_o_padrao(self):
         for valor in (None, "", "a" * 65, "com espaço", "../x", 5, ["x"]):
             with self.subTest(valor=valor):
