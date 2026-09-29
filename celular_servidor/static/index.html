@@ -89,7 +89,11 @@ function falar(texto, audio) {
   if (somAtual) { somAtual.pause(); somAtual = null; }
   if (audio) {
     somAtual = new Audio("data:audio/wav;base64," + audio);
-    somAtual.play().catch(() => falarNoNavegador(texto));
+    somAtual.play().catch(erro => {
+      // Sem este aviso, a troca para a voz do navegador passaria despercebida.
+      mostrar(`Não consegui tocar a voz do servidor (${erro.name}); usei a do navegador.`, true);
+      falarNoNavegador(texto);
+    });
     return;
   }
   falarNoNavegador(texto);

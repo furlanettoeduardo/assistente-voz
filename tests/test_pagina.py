@@ -89,6 +89,44 @@ class TestPedirDaPagina(unittest.TestCase):
         self.assertEqual(self.resultado["ok_invalido"]["erro"],
                          "O servidor mandou uma resposta que a página não entendeu. Tente de novo.")
 
+FALAR_JS = """
+let somAtual = null;
+const registro = [];
+function mostrar(texto, erro) { registro.push(["status", texto, !!erro]); }
+function falarNoNavegador(texto) { registro.push(["navegador", texto]); }
+class Audio {
+  constructor(src) { registro.push(["audio", src.slice(0, 22)]); this.src = src; }
+  play() { return Audio.recusar ? Promise.reject(Object.assign(new Error("x"), { name: "NotAllowedError" }))
+                                : Promise.resolve(); }
+  pause() { registro.push(["pausa"]); }
+}
+(async () => {
+  const saida = {};
+  falar("Oi.", "UklGRg==");
+  await new Promise(r => setTimeout(r, 0));
+  saida.tocou = registro.splice(0);
+  Audio.recusar = true;
+  falar("Oi.", "UklGRg==");
+  await new Promise(r => setTimeout(r, 0));
+  saida.recusado = registro.splice(0);
+  falar("Oi.", null);
+  saida.sem_audio = registro.splice(0);
+  console.log(JSON.stringify(saida));
+})();
+"""
+
+
+@unittest.skipUnless(NODE, "Node não está instalado; os testes do JavaScript da página foram pulados")
+class TestFalarNaPagina(unittest.TestCase):
+    def test_voz_do_servidor_e_reserva_do_navegador(self):
+        resultado = rodar_no_node("falar", FALAR_JS)
+        self.assertEqual(resultado["tocou"], [["audio", "data:audio/wav;base64,"]])
+        self.assertEqual(resultado["recusado"], [
+            ["pausa"], ["audio", "data:audio/wav;base64,"],
+            ["status", "Não consegui tocar a voz do servidor (NotAllowedError); usei a do navegador.", True],
+            ["navegador", "Oi."]])
+        self.assertEqual(resultado["sem_audio"], [["pausa"], ["navegador", "Oi."]])
+
 
 @unittest.skipUnless(NODE, "Node não está instalado; os testes do JavaScript da página foram pulados")
 class TestAcoesNaPagina(unittest.TestCase):
