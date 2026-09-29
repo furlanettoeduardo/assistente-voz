@@ -43,6 +43,10 @@ const acoes = [
     resultado: { ok: true, descricao: "deixei a lâmpada em azul" } },
   { ferramenta: "controlar_lampada", argumentos: { ligar: true }, resultado: { erro: "a lâmpada não respondeu" } },
   { ferramenta: "controlar_lampada", argumentos: {}, resultado: {} },
+  { ferramenta: "fechar_programa", argumentos: { nome: "chrome" }, resultado: { ok: true, descricao: "fechei chrome" } },
+  { ferramenta: "volume_do_pc", argumentos: { acao: "definir" }, resultado: { erro: "o PC não tem uma saída de som ativa" } },
+  { ferramenta: "energia_do_pc", argumentos: { acao: "desligar" },
+    resultado: { confirmar: true, pergunta: "Quer mesmo desligar o PC? Diga sim para confirmar." } },
 ];
 console.log(JSON.stringify(acoes.map(descreverAcao)));
 """
@@ -94,7 +98,10 @@ class TestAcoesNaPagina(unittest.TestCase):
             "Não abriu: paint (não liberado)",
             "Deixei a lâmpada em azul",
             "A lâmpada não respondeu",
-            "Erro na lâmpada",
+            "Algo deu errado",
+            "Fechei chrome",
+            "O PC não tem uma saída de som ativa",
+            "Quer mesmo desligar o PC? Diga sim para confirmar.",
         ])
 
 

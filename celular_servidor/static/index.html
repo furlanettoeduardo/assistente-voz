@@ -50,6 +50,7 @@
   .voce { color: var(--suave); margin: 0; }
   .ela { margin: 2px 0 0; }
   .acao { font-size: .85rem; color: var(--suave); margin: 4px 0 0; }
+  .acao a { color: inherit; }
   @media (prefers-reduced-motion: reduce) { #falar { transition: none; } }
 </style>
 </head>
@@ -92,11 +93,25 @@ function falar(texto) {
 function descreverAcao(a) {
   const r = a.resultado || {};
   const maiuscula = t => t.charAt(0).toUpperCase() + t.slice(1);
-  if (a.ferramenta === "controlar_lampada") {
-    return maiuscula(r.ok ? (r.descricao || "lâmpada atualizada") : (r.erro || "erro na lâmpada"));
+  if (a.ferramenta === "abrir_programa") {
+    const nome = (a.argumentos && a.argumentos.nome) || "?";
+    return r.ok ? `Abriu: ${nome}` : `Não abriu: ${nome} (${r.erro || "erro"})`;
   }
-  const nome = (a.argumentos && a.argumentos.nome) || "?";
-  return r.ok ? `Abriu: ${nome}` : `Não abriu: ${nome} (${r.erro || "erro"})`;
+  if (r.confirmar) return r.pergunta || "Esperando a confirmação";
+  return maiuscula(r.ok ? (r.descricao || "feito") : (r.erro || "algo deu errado"));
+}
+
+// A licença dos dados do Open-Meteo pede o crédito ao lado de onde a previsão aparece.
+function creditoDoTempo() {
+  const p = document.createElement("p");
+  p.className = "acao";
+  const link = (texto, url) => {
+    const a = document.createElement("a"); a.href = url; a.textContent = texto; a.target = "_blank"; a.rel = "noopener";
+    return a;
+  };
+  p.append("Dados de ", link("Open-Meteo.com", "https://open-meteo.com/"), " (",
+           link("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/deed.pt-br"), "), adaptados.");
+  return p;
 }
 
 function registrar({ transcricao, resposta, acoes }) {
@@ -107,6 +122,9 @@ function registrar({ transcricao, resposta, acoes }) {
   linha("voce", transcricao);
   linha("ela", resposta);
   (acoes || []).forEach(a => linha("acao", descreverAcao(a)));
+  if ((acoes || []).some(a => a.ferramenta === "previsao_do_tempo" && a.resultado && a.resultado.ok)) {
+    item.append(creditoDoTempo());
+  }
   historico.prepend(item);
 }
 
