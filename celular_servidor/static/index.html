@@ -82,8 +82,8 @@ function mostrar(texto, erro = false) {
   status.classList.toggle("erro", erro);
 }
 
-// Com a voz do servidor, toca o áudio que veio junto da resposta; sem ela (ou se o navegador não
-// deixar tocar), usa a voz do próprio navegador.
+// Resposta num JSON só (servidor antigo): com a voz do servidor, toca o áudio que veio junto; sem
+// ela (ou se o navegador não deixar tocar), usa a voz do próprio navegador.
 let somAtual = null;
 function falar(texto, audio) {
   if (somAtual) { somAtual.pause(); somAtual = null; }
@@ -107,6 +107,64 @@ function falarNoNavegador(texto) {
   const voz = speechSynthesis.getVoices().find(v => v.lang.replace("_", "-").startsWith("pt-BR"));
   if (voz) fala.voice = voz;
   speechSynthesis.speak(fala);
+}
+
+// Em streaming, a voz do servidor chega uma frase por vez e toca pela Web Audio: cada frase fica
+// agendada para começar no instante em que a anterior acaba, sem pausa entre elas.
+let contexto = null, fontes = [], proximo = 0;
+
+// O navegador só libera o som da Web Audio dentro de um gesto da pessoa: a página cria (ou retoma)
+// o contexto no botão e no envio do formulário.
+function prepararSom() {
+  if (!window.AudioContext) return;
+  try {
+    contexto = contexto || new AudioContext();
+    if (contexto.state !== "running") contexto.resume().catch(() => {});
+  } catch {} // sem a Web Audio, a fala vai pela voz do navegador
+}
+
+// Um pedido novo cala a fala anterior: as frases agendadas, o áudio do JSON e a voz do navegador.
+function calar() {
+  if (somAtual) { somAtual.pause(); somAtual = null; }
+  fontes.forEach(f => { try { f.stop(); } catch {} }); // navegadores antigos reclamam de parar duas vezes
+  fontes = [];
+  proximo = 0;
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+// Toca uma frase (um WAV em base64) logo depois da anterior; se não der, lança o erro do navegador.
+async function tocarFrase(pedido, audio) {
+  if (!contexto) prepararSom();
+  if (!contexto) throw new DOMException("Este navegador não tem a Web Audio.", "NotSupportedError");
+  if (contexto.state !== "running") {
+    // Sem um gesto da pessoa, o resume() pode ficar esperando para sempre: não segura a fala por isso.
+    let espera;
+    await Promise.race([contexto.resume(), new Promise(ok => { espera = setTimeout(ok, 500); })]);
+    clearTimeout(espera);
+    if (contexto.state !== "running") throw new DOMException("O navegador não liberou o som.", "NotAllowedError");
+  }
+  const binario = atob(audio);
+  const bytes = new Uint8Array(binario.length);
+  for (let i = 0; i < binario.length; i++) bytes[i] = binario.charCodeAt(i);
+  const buffer = await contexto.decodeAudioData(bytes.buffer);
+  if (pedido !== pedidoAtual || pedido.calado) return; // calada enquanto decodificava
+  const fonte = contexto.createBufferSource();
+  fonte.buffer = buffer;
+  fonte.connect(contexto.destination);
+  proximo = Math.max(proximo, contexto.currentTime);
+  fonte.start(proximo);
+  proximo += buffer.duration;
+  fontes.push(fonte);
+}
+
+// Se uma frase da voz do servidor não tocar, a voz do navegador fala a resposta inteira, uma vez só
+// (depois disso tratarEvento() ignora as frases), e as já agendadas param para as duas não falarem juntas.
+function usarReserva(pedido, erro) {
+  if (pedido !== pedidoAtual) return; // um pedido novo calou esta fala enquanto ela decodificava
+  pedido.reserva = true;
+  calar();
+  mostrar(`Não consegui tocar a voz do servidor (${erro.name}); usei a do navegador.`, true);
+  falarNoNavegador(pedido.texto);
 }
 
 // Uma linha curta para cada ação que o servidor executou.
@@ -134,27 +192,47 @@ function creditoDoTempo() {
   return p;
 }
 
-function registrar({ transcricao, resposta, acoes }) {
+function paragrafo(classe, texto) {
+  const p = document.createElement("p");
+  p.className = classe;
+  p.textContent = texto;
+  return p;
+}
+
+// Cada pedido vira um item do histórico: o que a pessoa disse aparece logo; a resposta, quando chega.
+function novoItem(transcricao) {
   const item = document.createElement("li");
-  const linha = (classe, texto) => {
-    const p = document.createElement("p"); p.className = classe; p.textContent = texto; item.append(p);
-  };
-  linha("voce", transcricao);
-  linha("ela", resposta);
-  (acoes || []).forEach(a => linha("acao", descreverAcao(a)));
-  if ((acoes || []).some(a => a.ferramenta === "previsao_do_tempo" && a.resultado && a.resultado.ok)) {
+  item.append(paragrafo("voce", transcricao));
+  historico.prepend(item);
+  return item;
+}
+
+function completarItem(item, { resposta, acoes }) {
+  acoes = Array.isArray(acoes) ? acoes : []; // fora do padrão, a página mostraria um erro do JavaScript em inglês
+  item.append(paragrafo("ela", resposta));
+  acoes.forEach(a => item.append(paragrafo("acao", descreverAcao(a))));
+  if (acoes.some(a => a.ferramenta === "previsao_do_tempo" && a.resultado && a.resultado.ok)) {
     item.append(creditoDoTempo());
   }
-  historico.prepend(item);
+}
+
+function registrar(dados) {
+  completarItem(novoItem(dados.transcricao), dados);
 }
 
 // Faz o pedido e devolve o JSON; queda do servidor ou resposta fora do padrão vira mensagem em português.
-async function pedir(url, opcoes) {
+// Com aoEvento, uma resposta em NDJSON é lida conforme chega (cada evento vai para aoEvento) e pedir()
+// devolve null; os erros de antes do streaming continuam vindo em JSON.
+async function pedir(url, opcoes, aoEvento) {
   let r;
   try {
     r = await fetch(url, opcoes);
   } catch {
     throw new Error("Sem conexão com o servidor do celular. Confira se ele ainda está rodando no Termux.");
+  }
+  if (aoEvento && /^application\/x-ndjson\s*(;|$)/i.test(r.headers.get("Content-Type") || "")) {
+    await lerEventos(r.body, aoEvento);
+    return null;
   }
   const dados = await r.json().catch(() => null);
   if (!r.ok) throw new Error((dados && dados.erro) || `O servidor respondeu com erro ${r.status}. Tente de novo.`);
@@ -162,18 +240,107 @@ async function pedir(url, opcoes) {
   return dados;
 }
 
+// Lê o corpo em NDJSON (um JSON por linha) conforme chega e entrega cada evento a aoEvento, na ordem,
+// esperando um terminar antes do próximo. Uma linha, ou um caractere acentuado, pode chegar cortada
+// entre dois pedaços: o que sobra espera o pedaço seguinte.
+async function lerEventos(corpo, aoEvento) {
+  const leitor = corpo.getReader();
+  const decodificador = new TextDecoder();
+  let resto = "";
+  for (;;) {
+    let pedaco;
+    try {
+      pedaco = await leitor.read();
+    } catch {
+      throw new Error("A conexão com o servidor caiu no meio da resposta. Tente de novo.");
+    }
+    resto += pedaco.done ? decodificador.decode() : decodificador.decode(pedaco.value, { stream: true });
+    const linhas = resto.split("\n");
+    resto = pedaco.done ? "" : linhas.pop();
+    try {
+      for (const linha of linhas) {
+        if (!linha.trim()) continue;
+        let evento = null;
+        try { evento = JSON.parse(linha); } catch {}
+        if (!evento || typeof evento !== "object") { // "null" ou "42" também não são um evento
+          throw new Error("O servidor mandou uma resposta que a página não entendeu. Tente de novo.");
+        }
+        await aoEvento(evento);
+      }
+    } catch (erro) {
+      // O resto da resposta não serve mais: fecha a conexão para o servidor parar de gerar a voz à toa.
+      leitor.cancel().catch(() => {});
+      throw erro;
+    }
+    if (pedaco.done) return;
+  }
+}
+
+// O pedido mais recente: só ele mexe no status e na fala. Um pedido antigo que ainda esteja chegando
+// só completa o seu item do histórico.
+let pedidoAtual = null;
+
+// Os eventos do streaming, na ordem em que o servidor manda: transcricao, resposta, um audio por
+// frase e fim (ou erro no lugar de resposta e fim).
+async function tratarEvento(pedido, evento) {
+  if (pedido.terminou) return;
+  const atual = pedido === pedidoAtual;
+  switch (evento.tipo) {
+    case "transcricao":
+      pedido.item = pedido.item || novoItem(evento.texto);
+      if (atual) mostrar("Pensando…");
+      break;
+    case "resposta":
+      pedido.texto = evento.texto || "";
+      completarItem(pedido.item || (pedido.item = novoItem("")), { resposta: pedido.texto, acoes: evento.acoes });
+      break;
+    case "audio":
+      pedido.audios++;
+      if (!atual || pedido.reserva || pedido.calado) break;
+      try {
+        await tocarFrase(pedido, evento.audio);
+      } catch (erro) {
+        usarReserva(pedido, erro);
+      }
+      break;
+    case "erro":
+      pedido.terminou = true;
+      if (atual) mostrar(evento.erro || "O servidor não conseguiu responder. Tente de novo.", true);
+      break;
+    case "fim":
+      pedido.terminou = true;
+      if (!atual) break;
+      if (!pedido.audios && !pedido.calado) falarNoNavegador(pedido.texto);
+      if (!pedido.reserva) mostrar("Segure o botão e fale"); // o aviso da troca de voz fica na tela
+      break;
+  }
+}
+
 async function enviar(url, opcoes) {
+  const pedido = { item: null, texto: "", audios: 0, reserva: false, terminou: false };
+  pedidoAtual = pedido;
+  calar();
   botao.classList.add("pensando");
   mostrar("Pensando…");
   try {
-    const dados = await pedir(url, opcoes);
-    registrar(dados);
-    mostrar("Segure o botão e fale");
-    falar(dados.resposta, dados.audio);
+    // Pede a resposta em partes (NDJSON), que o servidor manda conforme cada uma fica pronta.
+    const cabecalhos = new Headers(opcoes.headers);
+    cabecalhos.set("Accept", "application/x-ndjson");
+    const dados = await pedir(url, { ...opcoes, headers: cabecalhos }, evento => tratarEvento(pedido, evento));
+    if (dados) { // um JSON só: servidor antigo
+      registrar(dados);
+      if (pedido === pedidoAtual) {
+        mostrar("Segure o botão e fale");
+        falar(dados.resposta, dados.audio);
+      }
+    } else if (!pedido.terminou) {
+      throw new Error("A conexão com o servidor caiu no meio da resposta. Tente de novo.");
+    }
   } catch (e) {
-    mostrar(e.message, true);
+    // Depois do fim (ou do erro), a resposta já está completa: uma queda da conexão aí não apaga o status.
+    if (pedido === pedidoAtual && !pedido.terminou) mostrar(e.message, true);
   } finally {
-    botao.classList.remove("pensando");
+    if (pedido === pedidoAtual) botao.classList.remove("pensando");
   }
 }
 
@@ -181,6 +348,9 @@ async function comecar(ev) {
   ev.preventDefault();
   if (gravador || segurando) return;
   segurando = true;
+  // A pessoa vai falar: a assistente para, para o microfone não captar a voz dela.
+  calar();
+  if (pedidoAtual) pedidoAtual.calado = true;
   if (!navigator.mediaDevices || !window.MediaRecorder) {
     segurando = false;
     return mostrar("Este navegador não grava áudio aqui. Abra pelo endereço localhost.", true);
@@ -216,15 +386,17 @@ function parar() {
   if (gravador && gravador.state === "recording") gravador.stop();
 }
 
-botao.addEventListener("pointerdown", e => { botao.setPointerCapture(e.pointerId); comecar(e); });
-botao.addEventListener("pointerup", parar);
+// prepararSom() nos gestos: o pointerdown só vale como gesto com mouse; no toque, vale o pointerup.
+botao.addEventListener("pointerdown", e => { prepararSom(); botao.setPointerCapture(e.pointerId); comecar(e); });
+botao.addEventListener("pointerup", () => { prepararSom(); parar(); });
 botao.addEventListener("pointercancel", parar);
 botao.addEventListener("contextmenu", e => e.preventDefault());
-botao.addEventListener("keydown", e => { if (e.code === "Space" && !e.repeat) comecar(e); });
+botao.addEventListener("keydown", e => { if (e.code === "Space" && !e.repeat) { prepararSom(); comecar(e); } });
 botao.addEventListener("keyup", e => { if (e.code === "Space") parar(); });
 
 document.getElementById("formTexto").addEventListener("submit", e => {
   e.preventDefault();
+  prepararSom();
   const campo = document.getElementById("campo");
   const texto = campo.value.trim();
   if (!texto) return;
