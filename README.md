@@ -1,6 +1,8 @@
-# Assistente de voz caseira: fase 0.2 (mais ferramentas)
+# Assistente de voz caseira
 
 Você segura o botão de falar numa página e pede: "abre a calculadora", "fecha o chrome", "volume em 30", "acende a luz", "vai chover amanhã?" ou "toca Legião Urbana". Por enquanto, tudo roda no mesmo notebook. A lista completa está em [O que dá para pedir](#o-que-dá-para-pedir).
+
+**Onde o projeto está:** as fases v0.1 (abrir programas e lâmpada) e v0.2 (fechar programas, volume, bloquear e desligar o PC, hora, previsão do tempo e Spotify) estão prontas e testadas por voz no notebook. A próxima é a v0.3: voz gerada no servidor, memória curta da conversa e respostas mais rápidas. O plano completo está no [roadmap.md](roadmap.md).
 
 O projeto tem duas partes:
 
@@ -19,8 +21,12 @@ O notebook faz os dois papéis: roda o servidor e o agente, e a página abre em 
 Notebook
   página em http://localhost:8000 (botão de falar)
   celular_servidor/servidor.py ──▶ Groq: transcrição (Whisper) + LLM Qwen com ferramentas
+            │                   ──▶ Open-Meteo: previsão do tempo
+            │                   ──▶ Spotify: busca e comandos de música (opcional)
+            │                   ──▶ lâmpada Tuya, direto pela rede de casa (opcional)
             │
-            └──▶ pc_agente/agente.py em http://127.0.0.1:8765: abre só programas da lista
+            └──▶ pc_agente/agente.py em http://127.0.0.1:8765: abre e fecha só os programas da lista,
+                 muda o volume, bloqueia a tela e desliga o PC (só as ações liberadas no config)
 ```
 
 Rodar o servidor num celular Android com Termux continua possível, como alternativa opcional: veja [Rodando no celular](#rodando-no-celular-opcional).
@@ -166,6 +172,8 @@ python servidor.py
 ```
 
 O `verificar.py` confere tudo o que o servidor precisa (veja [Diagnóstico](#diagnóstico)). Depois, abra `http://localhost:8000` no navegador do notebook. Comece pelo campo de texto ("abre a calculadora"); depois teste o botão de voz.
+
+Depois de mudar o `config_servidor.json`, pare o servidor com Ctrl+C e suba de novo. Vale o mesmo para o agente e o `config_agente.json`: os dois só leem o config quando abrem.
 
 ## Lâmpada (opcional)
 
