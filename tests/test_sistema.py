@@ -52,7 +52,11 @@ class BaseSistema(unittest.TestCase):
 
     def setUp(self):
         self.esperas = []
-        for alvo, valor in (("PLATAFORMA", self.plataforma), ("dormir", self.esperas.append)):
+        # Os PIDs dos testes são inventados e podem ser de um aplicativo aberto de verdade: nenhum teste pode
+        # mandar WM_CLOSE para uma janela real.
+        self.molduras = mock.Mock(return_value=0)
+        for alvo, valor in (("PLATAFORMA", self.plataforma), ("dormir", self.esperas.append),
+                            ("fechar_molduras_da_loja", self.molduras)):
             patcher = mock.patch.object(sistema, alvo, valor)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -108,10 +112,11 @@ class TestFecharWindows(BaseSistema):
     def test_pede_para_fechar_sem_forcar_e_confere_com_o_tasklist(self):
         terminal = self.terminal({
             TASKKILL: (0, 'ÊXITO: sinal de encerramento enviado ao processo "notepad.exe" com PID 4242.'),
-            TASKLIST: [(0, ABERTO), (0, ABERTO), (0, NENHUM)],
+            TASKLIST: [(0, ABERTO), (0, ABERTO), (0, ABERTO), (0, NENHUM)],  # o 1º acha o PID
         })
         self.assertEqual(sistema.fechar(["notepad.exe"]), "fechou")
-        self.assertEqual(terminal.comandos(), [list(TASKKILL)] + [list(TASKLIST)] * 3)
+        self.assertEqual(terminal.comandos(), [list(TASKKILL)] + [list(TASKLIST)] * 4)
+        self.molduras.assert_called_once_with({4242})
         self.assertEqual(self.esperas, [sistema.INTERVALO_FECHAR] * 2)
         self.conferir_opcoes(terminal)
         for comando in terminal.comandos():  # /F perderia o que não foi salvo; /T impede o WM_CLOSE
@@ -125,9 +130,9 @@ class TestFecharWindows(BaseSistema):
         self.assertEqual(self.esperas, [])
 
     def test_outro_codigo_e_nao_fechou_sem_esperar(self):
-        terminal = self.terminal({TASKKILL: (1, "", SO_FORCANDO)})
+        terminal = self.terminal({TASKKILL: (1, "", SO_FORCANDO), TASKLIST: (0, ABERTO)})
         self.assertEqual(sistema.fechar(["notepad.exe"]), "nao_fechou")
-        self.assertEqual(terminal.comandos(), [list(TASKKILL)])
+        self.assertEqual(terminal.comandos(), [list(TASKKILL), list(TASKLIST)])
         self.assertEqual(self.esperas, [])
         self.assertIn("taskkill exit code 1", self.erros.getvalue())  # o detalhe fica só no terminal
 
@@ -135,7 +140,24 @@ class TestFecharWindows(BaseSistema):
         terminal = self.terminal({TASKKILL: (0, "ÊXITO"), TASKLIST: (0, ABERTO)})
         self.assertEqual(sistema.fechar(["notepad.exe"]), "pediu")
         self.assertTrue(3.5 <= sum(self.esperas) <= 4.5, self.esperas)
-        self.assertEqual(terminal.comandos().count(list(TASKLIST)), len(self.esperas) + 1)
+        self.assertEqual(terminal.comandos().count(list(TASKLIST)), len(self.esperas) + 2)  # +1: o PID
+
+    def test_aplicativo_da_loja_fecha_pela_moldura(self):
+        # A Calculadora não tem janela própria: o taskkill "envia" (código 0), mas quem fecha é a moldura.
+        calculadora, lista = comandos_do_taskkill("CalculatorApp.exe")
+        linha = '"CalculatorApp.exe","31988","Console","1","30.000 K"'
+        for codigo in (0, 1):  # com 1 (só forçando), a moldura também conta como pedido enviado
+            with self.subTest(codigo=codigo):
+                self.molduras.reset_mock(return_value=True)
+                self.molduras.return_value = 1
+                self.terminal({calculadora: (codigo, ""), lista: [(0, linha), (0, NENHUM)]})
+                self.assertEqual(sistema.fechar(["CalculatorApp.exe"]), "fechou")
+                self.molduras.assert_called_once_with({31988})
+
+    def test_le_os_pids_do_tasklist(self):
+        self.terminal({TASKLIST: (0, '"notepad.exe","4242","Console","1","1 K"\n"NOTEPAD.EXE","77","Console","1","1 K"\n'
+                                     '"notepad.exe.bak","9","Console","1","1 K"\n')})
+        self.assertEqual(sistema._pids_windows("notepad.exe"), {4242, 77})
 
     def test_varios_processos(self):
         code, lista_code = comandos_do_taskkill("Code.exe")
@@ -148,7 +170,8 @@ class TestFecharWindows(BaseSistema):
               lista_code: (0, NENHUM), lista_ajudante: [(0, linha_ajudante), (0, NENHUM)]}, "fechou"),
             ({code: (0, ""), ajudante: (1, "", "só forçando"), extra: (128, ""),
               lista_code: (0, NENHUM), lista_ajudante: (0, linha_ajudante)}, "pediu"),
-            ({code: (128, ""), ajudante: (1, "", "só forçando"), extra: (128, "")}, "nao_fechou"),
+            ({code: (128, ""), ajudante: (1, "", "só forçando"), extra: (128, ""), lista_ajudante: (0, NENHUM)},
+             "nao_fechou"),
             ({code: (128, ""), ajudante: (128, ""), extra: (128, "")}, "nao_aberto"),
         ]
         for respostas, esperado in casos:
@@ -263,6 +286,14 @@ class TestVolumeWindows(BaseSistema):
         self.assertEqual(str(outro), "não consegui controlar o volume do PC")
         self.assertIn("0x88890004", outro.detalhe)
         self.assertEqual(str(sistema._erro_de_volume(OSError("sem código"))), "não consegui controlar o volume do PC")
+
+
+@unittest.skipUnless(sys.platform == "win32", "as janelas dos aplicativos da loja só existem no Windows")
+class TestMoldurasDeVerdade(unittest.TestCase):
+    def test_busca_de_verdade_so_le(self):
+        """Percorre as janelas reais (só lê) com um PID que não tem janela: confere as chamadas do ctypes."""
+        self.assertEqual(sistema.molduras_da_loja(set()), [])
+        self.assertEqual(sistema.molduras_da_loja({0}), [])
 
 
 @unittest.skipUnless(sys.platform == "win32", "o Core Audio só existe no Windows")

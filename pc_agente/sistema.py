@@ -316,23 +316,101 @@ def _pedir_fechar_windows(processo: str) -> str:
     # não fecha um processo cujos filhos não têm janela (o conhost, os auxiliares do Chrome) e não manda
     # nada para ninguém, devolvendo 128, o mesmo código de "não encontrado".
     resultado = _rodar(["taskkill", "/IM", processo], "o PC não conseguiu fechar o programa")
-    if resultado.returncode == 0:  # pedido enviado a pelo menos uma janela; decide pelo código, não pelo texto
-        return ENVIADO
     if resultado.returncode == 128:
         return NAO_ABERTO
+    # Os aplicativos da Microsoft Store (a Calculadora, por exemplo) não têm janela própria: a janela que
+    # aparece é uma moldura do ApplicationFrameHost, e o pedido do taskkill não chega nela. Fecha a moldura.
+    molduras = fechar_molduras_da_loja(_pids_windows(processo))
+    if resultado.returncode == 0 or molduras:  # decide pelo código, não pelo texto
+        return ENVIADO
     _registrar(f"taskkill não conseguiu pedir para {processo} fechar ({_detalhe(resultado)})")
     return FALHOU
 
 
-def _existe_windows(processo: str) -> bool:
+def _processos_windows(processo: str) -> list[list[str]]:
+    """Linhas do tasklist (nome, PID, ...) dos processos com esse nome."""
     erro = "não consegui conferir se o programa fechou"
     resultado = _rodar(["tasklist", "/FI", f"IMAGENAME eq {processo}", "/FO", "CSV", "/NH"], erro)
     if resultado.returncode != 0:
         raise ErroNoSistema(erro, _detalhe(resultado))
     # Sem nenhum processo, o tasklist escreve uma frase ("INFORMAÇÕES: nenhuma tarefa...") em vez do CSV.
     alvo = processo.lower()
-    return any(linha and linha[0].strip().lower() == alvo
-               for linha in csv.reader((resultado.stdout or "").splitlines()))
+    return [linha for linha in csv.reader((resultado.stdout or "").splitlines())
+            if linha and linha[0].strip().lower() == alvo]
+
+
+def _existe_windows(processo: str) -> bool:
+    return bool(_processos_windows(processo))
+
+
+def _pids_windows(processo: str) -> set[int]:
+    return {int(linha[1]) for linha in _processos_windows(processo) if len(linha) > 1 and linha[1].strip().isdigit()}
+
+
+def molduras_da_loja(pids: set[int]) -> list[int]:
+    """
+    Janelas "ApplicationFrameWindow" visíveis que hospedam uma janela de um dos `pids`. Só lê: não
+    mexe em nada. Qualquer falha do ctypes devolve a lista vazia.
+    """
+    if not pids:
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        por_janela = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows.argtypes = [por_janela, wintypes.LPARAM]
+        user32.EnumChildWindows.argtypes = [wintypes.HWND, por_janela, wintypes.LPARAM]
+        user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+
+        def classe(janela) -> str:
+            nome = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(janela, nome, 256)
+            return nome.value
+
+        def dono(janela) -> int:
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(janela, ctypes.byref(pid))
+            return pid.value
+
+        molduras = []
+
+        def cada_janela(janela, _):
+            if classe(janela) == "ApplicationFrameWindow" and user32.IsWindowVisible(janela):
+                molduras.append(janela)
+            return True
+
+        user32.EnumWindows(por_janela(cada_janela), 0)
+        escolhidas = []
+        for moldura in molduras:
+            donos = set()
+
+            def cada_filha(janela, _, donos=donos):
+                donos.add(dono(janela))
+                return True
+
+            user32.EnumChildWindows(moldura, por_janela(cada_filha), 0)
+            if donos & pids:
+                escolhidas.append(moldura)
+        return escolhidas
+    except (OSError, AttributeError, ValueError) as e:
+        _registrar(f"não consegui procurar as janelas dos aplicativos da Microsoft Store ({e!r})")
+        return []
+
+
+def fechar_molduras_da_loja(pids: set[int]) -> int:
+    """Manda WM_CLOSE, como o X, para as molduras que hospedam os `pids`. Devolve quantas recebeu o pedido."""
+    molduras = molduras_da_loja(pids)
+    if not molduras:
+        return 0
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    WM_CLOSE = 0x0010
+    return sum(1 for moldura in molduras if user32.PostMessageW(moldura, WM_CLOSE, 0, 0))
 
 
 def _escapar(processo: str) -> str:
