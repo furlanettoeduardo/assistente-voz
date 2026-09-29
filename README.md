@@ -1,13 +1,13 @@
-# Assistente de voz caseira: fase 0.1b (programas e lâmpada)
+# Assistente de voz caseira: fase 0.2 (mais ferramentas)
 
-Você segura o botão de falar numa página, fala "abre a calculadora" e o programa abre no PC, ou "acende a luz" e a lâmpada acende. Por enquanto, tudo roda no mesmo notebook.
+Você segura o botão de falar numa página e pede: "abre a calculadora", "fecha o chrome", "volume em 30", "acende a luz", "vai chover amanhã?" ou "toca Legião Urbana". Por enquanto, tudo roda no mesmo notebook. A lista completa está em [O que dá para pedir](#o-que-dá-para-pedir).
 
 O projeto tem duas partes:
 
-- `celular_servidor/`: o servidor, que é o cérebro. Mostra a página com o botão de falar, transcreve o áudio no Groq, consulta o LLM, manda o PC agir e controla a lâmpada Tuya pela rede de casa. O nome da pasta vem da primeira versão: hoje ele roda no notebook, também roda num celular com Termux e, no futuro, vai rodar num Raspberry Pi.
-- `pc_agente/`: roda no computador e abre programas quando o servidor pede. Usa só a biblioteca padrão do Python.
+- `celular_servidor/`: o servidor, que é o cérebro. Mostra a página com o botão de falar, transcreve o áudio no Groq, consulta o LLM, manda o PC agir, controla a lâmpada Tuya pela rede de casa, consulta a previsão do tempo e toca música no Spotify. O nome da pasta vem da primeira versão: hoje ele roda no notebook, também roda num celular com Termux e, no futuro, vai rodar num Raspberry Pi.
+- `pc_agente/`: roda no computador e, quando o servidor pede, abre e fecha programas, muda o volume, bloqueia a tela e desliga o PC. Usa só a biblioteca padrão do Python.
 
-O LLM nunca executa comandos: ele só escolhe um nome da lista de programas do agente, que roda o comando cadastrado sem shell, e todo pedido ao PC exige token.
+O LLM nunca executa comandos: ele só escolhe nomes das listas do agente (programas para abrir e para fechar) e ações fixas (volume, bloquear e desligar, se liberadas). O agente roda o comando cadastrado sem shell, e todo pedido ao PC exige token. Desligar o PC sempre pede confirmação por voz.
 
 ## Arquitetura
 
@@ -31,7 +31,7 @@ Rodar o servidor num celular Android com Termux continua possível, como alterna
 - **Satélites:** um ESP32-S3 com PSRAM por cômodo, com microfone, alto-falante e a palavra de ativação "hey Jarvis" detectada no próprio chip (microWakeWord). Eles falam com o cérebro pelo endpoint `/voz`.
 - **PC:** apenas o agente, instalado para rodar em segundo plano.
 
-O cérebro, os satélites, o agente e a lâmpada ficam na rede de casa; só a transcrição e o LLM saem para a internet, no Groq. Não há servidor na nuvem: a lâmpada, o agente e o Wake-on-LAN só existem na rede local, e um servidor exposto na internet, capaz de abrir programas no PC, seria um risco de segurança permanente. O acesso de fora de casa, quando existir, será via Tailscale. As decisões e as próximas fases estão no [roadmap.md](roadmap.md).
+O cérebro, os satélites, o agente e a lâmpada ficam na rede de casa. Saem para a internet só a transcrição e o LLM (no Groq), a cidade da previsão do tempo (no Open-Meteo) e, se você configurar o Spotify, as buscas e os comandos de música. Não há servidor na nuvem: a lâmpada, o agente e o Wake-on-LAN só existem na rede local, e um servidor exposto na internet, capaz de abrir programas no PC, seria um risco de segurança permanente. O acesso de fora de casa, quando existir, será via Tailscale. As decisões e as próximas fases estão no [roadmap.md](roadmap.md).
 
 ## Requisitos
 
@@ -98,6 +98,8 @@ Salve os arquivos em UTF-8 (o padrão do Bloco de Notas e do VS Code). Se um con
 | `token` | Segredo compartilhado com o servidor, sem acentos. O agente não inicia com o token vazio ou com o valor de exemplo. |
 | `porta` | Porta em que o agente escuta. Padrão: `8765`. |
 | `programas` | Nome falado → comando que o PC executa, como lista de strings. Precisa ter pelo menos um programa. Maiúsculas e espaços extras no nome não importam. |
+| `fechar` | Opcional. Nome falado → nome do processo que a assistente pode fechar, como `"chrome": "chrome.exe"`. |
+| `acoes` | Opcional. O que mais o servidor pode pedir: `"volume"`, `"bloquear"` (a tela) e `"desligar"`. Sem a chave, valem `volume` e `bloquear`. |
 
 1. Só se o servidor for rodar em outro aparelho (modo celular): [descubra o IP do PC](#1-descubra-o-ip-do-pc) e reserve-o no roteador (reserva de DHCP), para ele não mudar. Por exemplo, `192.168.0.10`. No modo notebook, pule este passo.
 2. Gere um token e cole em `token`:
@@ -107,6 +109,9 @@ Salve os arquivos em UTF-8 (o padrão do Bloco de Notas e do VS Code). Se um con
 3. Ajuste a lista de programas. Os nomes são o que você vai falar; o comando é o que o PC executa.
 
 Exemplos no Linux: `["firefox"]`, `["code"]`, `["spotify"]`, `["nautilus"]`.
+
+4. Opcional: em `fechar`, cadastre os programas que a assistente pode fechar. No Windows, o processo é o nome com `.exe` que aparece no Gerenciador de Tarefas, na aba Detalhes (na aba Processos, clique com o botão direito no programa e escolha "Ir para detalhes"). No Linux, é o nome inteiro do programa, sem a pasta, como aparece em `ps -eo args`. O `explorer.exe` (a barra de tarefas e a área de trabalho) e os processos do próprio Windows são recusados. No Windows, a assistente pede para o programa fechar como se você clicasse no X: se ele tiver algo por salvar, ele pergunta, e ela avisa que ele continua aberto. No Linux, o programa recebe o sinal de encerrar (SIGTERM), e a maioria fecha sem perguntar: salve antes.
+5. Opcional: em `acoes`, libere o volume, o bloqueio da tela e o desligamento. `desligar` só funciona se estiver na lista, e o PC desliga 30 segundos depois do "sim" (no Linux, 1 minuto), fechando os programas sem perguntar: salve o que estiver aberto. Um config antigo, sem `acoes`, passa a liberar `volume` e `bloquear` quando você atualiza o agente.
 
 No Windows, `["cmd", "/c", "start", "", "nome"]` funciona para a maioria dos programas instalados. Nesse formato, um `&` dentro de uma URL precisa virar `^&`. Para caminhos completos, dobre as barras invertidas, que é como o JSON exige: `["C:\\Program Files\\Pasta\\programa.exe"]`. Com barra simples, o JSON dá erro ou, pior, transforma `\t` e `\n` em outros caracteres e o caminho não abre.
 
@@ -121,8 +126,11 @@ No Windows, `["cmd", "/c", "start", "", "nome"]` funciona para a maioria dos pro
 | `llm_model` | Nome exato do modelo Qwen, como aparece em [console.groq.com/docs/models](https://console.groq.com/docs/models). Precisa suportar tool calling. |
 | `pc_url` | Endereço do agente, com `http://`, IP e porta. No modo notebook, `http://127.0.0.1:8765`; com o servidor em outro aparelho, o IP do PC na rede, como `http://192.168.0.10:8765`. |
 | `pc_token` | O mesmo valor de `token` do agente. |
+| `pc_mac` e `pc_broadcast` | Opcionais. Para ligar o PC pela rede, como explica [Wake-on-LAN](#ligar-o-pc-pela-rede-wake-on-lan-opcional). Vazios, a assistente não liga o PC. |
 | `host` e `porta` | Onde o servidor escuta. Padrão: `127.0.0.1:8000`, só o próprio aparelho acessa. |
+| `cidade` | Opcional. A cidade da [previsão do tempo](#previsão-do-tempo) quando você não diz outra, como `"Curitiba, PR"`. |
 | `lampada` | Opcional. `id`, `chave_local`, `ip` e `versao` da lâmpada Tuya, como explica [Lâmpada](#lâmpada-opcional). Sem lâmpada, apague o bloco. |
+| `spotify` | Opcional. `client_id` do app do Spotify e, se quiser, `dispositivo`, como explica [Spotify](#spotify-opcional-conta-premium). |
 
 Em setembro de 2026, o Qwen disponível no Groq é o `qwen/qwen3.8-27b`, na categoria Preview. Modelos Preview trocam de nome ou saem do ar com pouco aviso, então confira a lista antes de preencher.
 
@@ -227,6 +235,80 @@ Deixe o interruptor da lâmpada sempre ligado: desligada no interruptor, ela sai
 
 No [modo celular](#rodando-no-celular-opcional), o servidor fala com a lâmpada do mesmo jeito, desde que o celular esteja na mesma rede Wi-Fi que ela.
 
+## O que dá para pedir
+
+| Pedido | O que acontece |
+|---|---|
+| "abre o chrome", "fecha o chrome" | Abre ou fecha o programa. Fechar exige o programa em `fechar` no config do agente. |
+| "volume em 30", "aumenta o volume", "qual o volume?", "muta o PC" | Muda ou consulta o volume do PC (exige `volume` em `acoes`). |
+| "bloqueia o PC" | Bloqueia a tela (exige `bloquear` em `acoes`). |
+| "desliga o PC", e depois "sim" | Pergunta antes e desliga em 30 segundos (exige `desligar` em `acoes`). "Cancela o desligamento" cancela. |
+| "que horas são?", "que dia é hoje?" | Responde com a data e a hora do aparelho que roda o servidor. |
+| "vai chover amanhã?", "como está o tempo em Salvador?" | Consulta a [previsão do tempo](#previsão-do-tempo). |
+| "acende a luz", "deixa a luz azul", "diminui a luz para 30%" | Controla a [lâmpada](#lâmpada-opcional). |
+| "toca Legião Urbana", "toca a playlist Rock Nacional", "pausa a música", "próxima" | Toca no [Spotify](#spotify-opcional-conta-premium) do PC. |
+
+A assistente só oferece ao LLM o que funciona naquele momento: sem o PC ligado, por exemplo, ela não tenta abrir programas e avisa que ele está desligado.
+
+A confirmação do desligamento não passa pelo LLM: a pergunta é sempre a mesma ("Quer mesmo desligar o PC? Diga sim para confirmar."), e só um "sim" curto ("sim", "pode", "confirmo", "sim, pode desligar"), dito nos 30 segundos seguintes, desliga o PC. Um "não" curto ("não", "cancela", "deixa pra lá") recusa; qualquer outro pedido descarta a pergunta e é atendido normalmente.
+
+## Previsão do tempo
+
+A previsão vem do Open-Meteo, gratuito e sem chave. Preencha `"cidade"` no `config_servidor.json` no formato `"Cidade, UF"` (por exemplo `"Curitiba, PR"`) para não precisar dizer a cidade toda vez; dá para perguntar de outra cidade a qualquer momento. A previsão vai de hoje até daqui a 6 dias.
+
+Os dados são de [Open-Meteo.com](https://open-meteo.com/), sob a licença [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.pt-br). A assistente traduz os códigos do tempo para o português e arredonda as temperaturas, e a página mostra o crédito ao lado de cada previsão.
+
+## Spotify (opcional, conta Premium)
+
+O servidor procura a música pela API do Spotify e manda tocar no aplicativo aberto no PC. Só funciona com Premium: o Spotify só deixa controlar a reprodução assim, e o dono do app precisa ser Premium.
+
+### 1. Crie o app no painel do Spotify (uma vez)
+
+1. Entre em [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) com a sua conta e clique em **Create app**.
+2. Preencha o nome e a descrição. Em **Redirect URIs**, escreva exatamente `http://127.0.0.1:8888/callback` e clique em **Add** (o Spotify não aceita mais `localhost`).
+3. Marque só **Web API**, aceite os termos e salve.
+4. Em **Settings**, copie o **Client ID**. O Client Secret não é usado.
+
+### 2. Preencha o config
+
+No `config_servidor.json`:
+
+```
+  "spotify": {
+    "client_id": "O-CLIENT-ID-QUE-VOCÊ-COPIOU",
+    "dispositivo": ""
+  }
+```
+
+`dispositivo` é opcional: o nome do PC como aparece no Spotify, em "Conectar a um dispositivo". Preenchido, só esse aparelho vale; vazio, vale o primeiro computador da lista. A música vai sempre para o PC, mesmo que o Spotify esteja tocando no celular ou na TV.
+
+### 3. Conecte a sua conta (uma vez)
+
+Na pasta `celular_servidor`, com o ambiente virtual ativado:
+
+```
+python spotify_conectar.py
+```
+
+O navegador abre na página do Spotify: autorize, e o terminal mostra "Spotify conectado!". O script grava o `spotify_token.json`, que dá acesso à sua conta: ele está no `.gitignore` e não deve ser enviado a ninguém. Se o navegador estiver em outro aparelho (no Raspberry Pi, por exemplo), rode `python spotify_conectar.py --colar` e cole o endereço para onde o Spotify redirecionou.
+
+Suba o servidor de novo: ele mostra `[servidor] Spotify conectado.`, e o `verificar.py` confere a conexão no passo 9.
+
+A autorização dura 6 meses; depois, rode o `spotify_conectar.py` de novo. Se o Spotify estiver fechado no PC e `"spotify"` estiver na lista de programas do agente, a assistente abre o aplicativo e tenta de novo por uns 15 segundos. Para usar outra conta além da dona do app, adicione-a antes em **Settings → Users Management** (até 5 contas).
+
+## Ligar o PC pela rede (Wake-on-LAN, opcional)
+
+Só faz sentido com o servidor em outro aparelho (o celular ou, no futuro, o Raspberry Pi): no modo notebook, o servidor desliga junto com o PC. Com o PC desligado e `pc_mac` preenchido, a assistente manda o "pacote mágico" pela rede e espera o agente responder por até 90 segundos antes de abrir o programa.
+
+1. No PC, rode `getmac /v` e copie o **Endereço físico** da placa de rede com cabo para `"pc_mac"`, como `"AA:BB:CC:DD:EE:FF"`.
+2. Em `"pc_broadcast"`, use o endereço de broadcast da rede, que é o IP do PC com o último número trocado por 255 (por exemplo `"192.168.0.255"`). Vazio, vale `255.255.255.255`, que nem sempre sai pela rede certa.
+3. Prepare o PC:
+   - use cabo de rede: pelo Wi-Fi, um PC desligado quase nunca liga;
+   - no BIOS/UEFI, ative "Wake on LAN" (ou "Power On By PCI-E") e desative o "ErP";
+   - no Gerenciador de Dispositivos, nas propriedades da placa de rede: em Gerenciamento de Energia, marque "Permitir que este dispositivo ative o computador" e a opção de ativar só com o pacote mágico ("Magic Packet"); em Avançado, ative "Wake on Magic Packet";
+   - a Intel recomenda desativar a Inicialização Rápida do Windows. O Windows só garante o Wake-on-LAN a partir da suspensão ou da hibernação: a partir do PC desligado, depende da placa-mãe.
+4. O agente precisa abrir sozinho quando você entra no Windows: aperte Win+R, digite `shell:startup` e crie ali um atalho para o `pc_agente\iniciar_agente.bat`. Mesmo assim, ele só responde depois do login: sem login automático, o PC liga e fica na tela de login, e a assistente avisa que ele não respondeu. Voltando da suspensão ou da hibernação, o agente que já estava aberto continua respondendo.
+
 ## Diagnóstico
 
 Para rodar só o diagnóstico, a qualquer hora:
@@ -243,8 +325,10 @@ Ele confere, em ordem, e explica em português o que falhou e como resolver:
 3. a chave do Groq funciona e o modelo de transcrição existe;
 4. o modelo em `llm_model` existe na API configurada;
 5. o agente do PC responde em `pc_url`;
-6. o agente aceita o `pc_token`;
-7. a lâmpada responde, se houver uma configurada.
+6. o agente aceita o `pc_token` (e mostra o que ele libera: programas, o que fecha e as ações);
+7. a lâmpada responde, se houver uma configurada;
+8. a previsão do tempo responde para a `cidade`, se houver uma;
+9. o Spotify está conectado, se estiver configurado.
 
 Para testar as chaves, ele só pede a lista de modelos da API: não grava áudio nem gasta tokens. Ele termina com código 0 quando está tudo certo, 1 quando há problemas mas o servidor consegue subir, 2 quando o servidor nem sobe, 3 quando o próprio diagnóstico quebra e 130 quando é interrompido com Ctrl+C. As dicas mostram o caminho completo dos arquivos, então funcionam de qualquer pasta.
 
@@ -350,9 +434,12 @@ Os testes não chamam nenhuma API real. O LLM, a transcrição e a lista de mode
 - remoção dos blocos `<think>` da resposta, inclusive sem abertura ou sem fechamento;
 - mensagens em português para erros da API, queda da rede, PC desligado, servidor fora do ar e configuração ausente ou com valor errado;
 - a lâmpada: conferência do bloco `lampada`, tradução dos pedidos para os comandos da Tuya e dos erros para o português, e o `tinytuya` de verdade falando com uma lâmpada falsa em `127.0.0.1` nos protocolos 3.3, 3.4 e 3.5, inclusive com chave ou versão erradas e com a lâmpada desligada;
+- fechar programas, volume, bloquear e desligar o PC: os comandos exatos do Windows e do Linux (taskkill, tasklist, pkill, wpctl, pactl, shutdown), com as funções que mexem no PC trocadas por mocks. Nenhum teste muda o volume, bloqueia a tela ou desliga nada; no Windows, só uma leitura do volume real;
+- a confirmação por voz antes de desligar: o que conta como "sim" e como "não", a pergunta que vence e que vale uma vez só;
+- o Wake-on-LAN, a previsão do tempo (com um Open-Meteo falso) e o Spotify (com uma API falsa: renovação do token, busca, escolha do computador, erros de Premium e de cota, e o `spotify_conectar.py` de ponta a ponta);
 - o diagnóstico `verificar.py`, os scripts do Termux e o `iniciar_agente.bat`.
 
-Os testes copiam o código para uma pasta temporária com configs próprios, então nunca leem nem alteram os seus `config_*.json`. Passam no Windows e no Linux. Alguns são de uma plataforma só e aparecem como `skipped` nas outras: o `.bat` só roda no Windows; os scripts do Termux e os dois testes que sobem o agente em `0.0.0.0` (Ctrl+C e porta ocupada), só no Linux, para não acionar o firewall do Windows; o JavaScript da página, só com o Node instalado; os testes com a lâmpada falsa, só com o `tinytuya` instalado. Sem Flask, os testes do servidor e do diagnóstico também aparecem como `skipped`: instale o `requirements.txt` para rodá-los.
+Os testes copiam o código para uma pasta temporária com configs próprios, então nunca leem nem alteram os seus `config_*.json`. Passam no Windows e no Linux. Alguns são de uma plataforma só e aparecem como `skipped` nas outras: o `.bat` só roda no Windows; os scripts do Termux e os dois testes que sobem o agente em `0.0.0.0` (Ctrl+C e porta ocupada), só no Linux, para não acionar o firewall do Windows; o JavaScript da página, só com o Node instalado; os testes com a lâmpada falsa, só com o `tinytuya` instalado; a leitura real do volume e o Core Audio falso, só no Windows; a permissão do `spotify_token.json`, só no Linux. Sem Flask, os testes do servidor e do diagnóstico também aparecem como `skipped`: instale o `requirements.txt` para rodá-los.
 
 ## Solução de problemas
 
@@ -409,6 +496,31 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **O wizard não lista a lâmpada ou dá erro de permissão**: a conta do app não está vinculada ao projeto, a região está errada (tente `us-e`, como explica o [passo do wizard](#2-pegue-o-id-e-a-chave-local-uma-vez)) ou o teste do IoT Core venceu (renove em **Cloud → Cloud Services** na plataforma).
 - **"Este modelo de lâmpada usa outros comandos"**: a lâmpada não segue o padrão das lâmpadas Tuya mais comuns (os comandos 20 a 24), o único que o servidor sabe mandar por enquanto.
 - **O branco sai amarelado e o "branco quente" sai azulado**: alguns modelos invertem a escala de temperatura. Troque os valores dos brancos em `BRANCOS`, no `celular_servidor/lampada.py` (0 e 1000 trocam de lugar).
+
+### Controle do PC
+
+- **"'x' não está na lista de programas que posso fechar"**: cadastre o programa em `fechar` no `config_agente.json` e abra o agente de novo.
+- **"x não está aberto"**: o agente não achou o processo. Confira o nome no Gerenciador de Tarefas, na aba Detalhes, com o `.exe`.
+- **"pedi para fechar x, mas ele continua aberto; talvez esteja esperando você salvar algo"**: o programa pediu para salvar, ou não aceita o pedido de fechar (alguns aplicativos da Microsoft Store, como a Calculadora, podem ignorá-lo). Feche à mão.
+- **"... precisa ter o .exe no fim"** ou **"... precisa ser só o nome do processo"**: em `fechar`, use só o nome do processo, como `"chrome.exe"`, sem pasta. O `ApplicationFrameHost.exe` é recusado (ele fecharia todos os aplicativos da Microsoft Store de uma vez), e o `explorer.exe` também: pedir para ele fechar abre a caixa "Desligar o Windows".
+- **"o controle de volume está desligado no config_agente.json do PC"**, **"bloquear a tela está desligado..."** ou **"desligar o PC não está liberado..."**: acrescente a ação em `acoes` no `config_agente.json` e abra o agente de novo.
+- **"o PC não tem uma saída de som ativa"**: nenhum alto-falante ou fone está ativo no Windows.
+- **"não achei o wpctl nem o pactl para controlar o volume neste PC"** (Linux): instale o PipeWire (`wpctl`) ou o `pulseaudio-utils` (`pactl`).
+- **O volume não muda ou a tela não bloqueia**: o agente precisa rodar na sessão do usuário, na janela aberta pelo `iniciar_agente.bat`, e não como serviço do Windows.
+- **Quero cancelar o desligamento**: diga "cancela o desligamento" nos 30 segundos, ou rode `shutdown /a` no PC. **"já existe um desligamento agendado"**: cancele o anterior do mesmo jeito.
+- **O Wake-on-LAN não liga o PC**: confira o `pc_mac` (da placa com cabo), o `pc_broadcast`, o BIOS/UEFI e a placa de rede, como em [Wake-on-LAN](#ligar-o-pc-pela-rede-wake-on-lan-opcional). **"mandei o sinal para ligar o PC, mas o agente não respondeu em 90 segundos"**: o PC pode ter ligado e ficado na tela de login; faça login e abra o agente.
+
+### Previsão do tempo e Spotify
+
+- **"não encontrei a cidade x"**: use o formato `"Cidade, UF"`, como `"Curitiba, PR"`.
+- **"não consegui consultar a previsão do tempo agora"**: o aparelho está sem internet ou o Open-Meteo está fora do ar. Tente de novo em instantes.
+- **"o Spotify ainda não foi conectado"** ou **"a autorização do Spotify venceu (ela dura 6 meses)"**: na pasta `celular_servidor`, rode `python spotify_conectar.py`.
+- **"o Spotify recusou: a conta precisa ser Premium..."**: o dono do app precisa ter Premium ativo (depois de assinar, pode levar algumas horas para valer), e outras contas precisam estar em Settings → Users Management.
+- **"o Spotify não está aberto no PC: abra o aplicativo e peça de novo"**: abra o Spotify no PC. Com `"spotify"` na lista de programas do agente, a assistente abre sozinha. Se você preencheu `dispositivo`, confira se o nome é o mesmo que aparece no Spotify, em "Conectar a um dispositivo".
+- **"abri o Spotify no PC, mas ele ainda não apareceu para tocar"**: o aplicativo demorou mais de 15 segundos para abrir. Peça de novo em alguns segundos.
+- **"INVALID_CLIENT: Invalid redirect URI"** na página do Spotify: a Redirect URI do app no painel precisa ser exatamente `http://127.0.0.1:8888/callback`. Corrija em Settings, salve e rode o `spotify_conectar.py` de novo.
+- **A porta 8888 está ocupada** ao conectar: feche o programa que a usa ou rode `python spotify_conectar.py --colar`.
+- **"a cota do app do Spotify acabou por enquanto"** ou **"o Spotify pediu para esperar um pouco"**: espere alguns minutos.
 
 ### Página, Termux e instalação
 
