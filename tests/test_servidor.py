@@ -61,6 +61,14 @@ class LampadaDeMentira:
         return self.dps
 
 
+def nomes_das_ferramentas(pedido: dict) -> list[str]:
+    return [f["function"]["name"] for f in pedido.get("tools", [])]
+
+
+def ferramenta_do_pedido(pedido: dict, nome: str) -> dict:
+    return next(f["function"] for f in pedido["tools"] if f["function"]["name"] == nome)
+
+
 def carregar_servidor(destino: Path, **config):
     base = {
         "groq_api_key": CHAVE_FALSA, "stt_model": "whisper-falso",
@@ -127,12 +135,19 @@ class TestServidor(unittest.TestCase):
         cls.marcador = pasta / "programa-aberto.txt"
         cls.agente, cls.servidor_agente = iniciar_agente(
             pasta / "agente", TOKEN, {PROGRAMA: comando_de_teste(cls.marcador)})
+        # O agente libera volume e bloquear por padrão: aqui, qualquer chamada ao sistema de verdade falha.
+        cls.blindagem = mock.patch.multiple(cls.agente.sistema, **{
+            nome: mock.Mock(side_effect=AssertionError(f"o teste chamou sistema.{nome} de verdade"))
+            for nome in ("volume_ler", "volume_definir", "volume_mudo", "fechar", "bloquear", "desligar",
+                         "cancelar_desligamento")})
+        cls.blindagem.start()
         cls.llm = LLMFalso()
         cls.servidor = carregar_servidor(pasta / "servidor", llm_base_url=cls.llm.url + "/",
                                          pc_url=cls.servidor_agente.url + "/")
 
     @classmethod
     def tearDownClass(cls):
+        cls.blindagem.stop()
         cls.llm.parar()
         cls.servidor_agente.parar()
         cls.tmp.cleanup()
@@ -238,9 +253,9 @@ class TestServidor(unittest.TestCase):
         self.assertEqual(acao["resultado"], {"erro": "token inválido"})
         self.popen.assert_not_called()
         self.assertFalse(self.marcador.exists())
-        # Sem a lista do PC, o LLM nem recebe a ferramenta e é avisado de que o PC está inacessível.
+        # Sem a lista do PC, o LLM só recebe o que não depende dele e é avisado de que o PC está inacessível.
         primeiro = self.llm.pedidos_de_chat()[0]["json"]
-        self.assertNotIn("tools", primeiro)
+        self.assertEqual(nomes_das_ferramentas(primeiro), ["previsao_do_tempo"])
         self.assertIn("inacessível", primeiro["messages"][0]["content"])
         self.assertIn("o agente do PC recusou o pc_token", self.terminal.getvalue())
 
@@ -251,7 +266,7 @@ class TestServidor(unittest.TestCase):
 
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["acoes"], [])
-        self.assertNotIn("tools", self.llm.pedidos_de_chat()[0]["json"])
+        self.assertEqual(nomes_das_ferramentas(self.llm.pedidos_de_chat()[0]["json"]), ["previsao_do_tempo"])
         self.assertIn("não consegui falar com o agente do PC", self.terminal.getvalue())
 
     def test_pc_cai_no_meio_do_comando(self):
@@ -372,15 +387,15 @@ class TestServidor(unittest.TestCase):
     def test_ferramenta_da_lampada_so_aparece_com_lampada(self):
         self.llm.programar(resposta_texto("Oi."))
         self.enviar_texto("oi")
-        nomes = [f["function"]["name"] for f in self.llm.pedidos_de_chat()[0]["json"]["tools"]]
-        self.assertEqual(nomes, ["abrir_programa"])
+        basicas = ["abrir_programa", "volume_do_pc", "energia_do_pc"]  # o agente dos testes libera o padrão
+        self.assertEqual(nomes_das_ferramentas(self.llm.pedidos_de_chat()[0]["json"]), [*basicas, "previsao_do_tempo"])
 
         self.com_lampada()
         self.llm.programar(resposta_texto("Oi."))
         self.enviar_texto("oi")
-        ferramentas = self.llm.pedidos_de_chat()[0]["json"]["tools"]
-        self.assertEqual([f["function"]["name"] for f in ferramentas], ["abrir_programa", "controlar_lampada"])
-        cores = ferramentas[1]["function"]["parameters"]["properties"]["cor"]["enum"]
+        pedido = self.llm.pedidos_de_chat()[0]["json"]
+        self.assertEqual(nomes_das_ferramentas(pedido), [*basicas, "controlar_lampada", "previsao_do_tempo"])
+        cores = ferramenta_do_pedido(pedido, "controlar_lampada")["parameters"]["properties"]["cor"]["enum"]
         self.assertEqual(cores, self.servidor.lampada.NOMES_DAS_CORES)  # o LLM só escolhe da lista
 
     def test_lampada_funciona_mesmo_com_o_pc_desligado(self):
@@ -388,8 +403,8 @@ class TestServidor(unittest.TestCase):
         self.llm.programar(resposta_texto("Oi."))
         with mock.patch.object(self.servidor, "PC_URL", "http://127.0.0.1:9"):
             self.enviar_texto("acende a luz")
-        nomes = [f["function"]["name"] for f in self.llm.pedidos_de_chat()[0]["json"]["tools"]]
-        self.assertEqual(nomes, ["controlar_lampada"])
+        self.assertEqual(nomes_das_ferramentas(self.llm.pedidos_de_chat()[0]["json"]),
+                         ["controlar_lampada", "previsao_do_tempo"])
 
     def test_fluxo_completo_com_a_lampada(self):
         falsa = self.com_lampada()

@@ -7,12 +7,16 @@ Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo
 """
 import errno
 import importlib.util
+import ipaddress
 import json
 import logging
 import re
 import socket
 import sys
+import threading
+import time
 import traceback
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,6 +31,8 @@ except ImportError as e:  # o .venv não foi ativado ou o requirements não foi 
              "No PC, ative antes o .venv; no Termux, dá para rodar bash scripts/termux-instalar.sh na pasta do projeto.")
 
 import lampada
+import spotify
+import tempo
 
 BASE = Path(__file__).parent
 ARQUIVO_CONFIG = BASE / "config_servidor.json"
@@ -127,17 +133,20 @@ if not isinstance(HOST, str) or not HOST:
 PORTA = ler_porta(CFG, ARQUIVO_CONFIG, 8000)
 
 
-def exemplo_da_lampada():
-    """Bloco "lampada" do config de exemplo, para reconhecer os campos ainda não preenchidos."""
+def ler_exemplo() -> dict:
+    """config_servidor.example.json, para reconhecer os campos que ainda estão com o valor de exemplo."""
     try:
-        return json.loads((BASE / "config_servidor.example.json").read_text(encoding="utf-8")).get("lampada")
-    except (OSError, ValueError, AttributeError):
-        return None
+        exemplo = json.loads((BASE / "config_servidor.example.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return exemplo if isinstance(exemplo, dict) else {}
 
+
+EXEMPLO = ler_exemplo()
 
 # A lâmpada é opcional: sem o bloco "lampada", ou com campos por preencher, o servidor funciona sem ela.
 try:
-    _CONFIG_LAMPADA, LAMPADA_FALTANDO = lampada.ler_config(CFG.get("lampada"), exemplo_da_lampada())
+    _CONFIG_LAMPADA, LAMPADA_FALTANDO = lampada.ler_config(CFG.get("lampada"), EXEMPLO.get("lampada"))
 except ValueError as e:
     sys.exit(f"Em {ARQUIVO_CONFIG}, {e}")
 if _CONFIG_LAMPADA and importlib.util.find_spec("tinytuya") is None:
@@ -157,6 +166,52 @@ def aviso_da_lampada() -> str:
     return "[servidor] nenhuma lâmpada configurada."
 
 
+def texto_opcional(bloco: dict, chave: str, exemplo: dict, onde: str = "") -> str | None:
+    """Texto opcional do config: ausente, vazio ou ainda com o valor de exemplo vale como não preenchido."""
+    valor = bloco.get(chave)
+    if valor is None:
+        return None
+    if not isinstance(valor, str):
+        sys.exit(f'Em {ARQUIVO_CONFIG}, "{chave}"{onde} precisa ser {TIPOS[str]}, como em config_servidor.example.json.')
+    valor = valor.strip()
+    return valor if valor and valor != exemplo.get(chave) else None
+
+
+# Previsão do tempo: "cidade" é só a cidade padrão; o usuário pode perguntar de outra.
+CIDADE = texto_opcional(CFG, "cidade", EXEMPLO)
+TEMPO = tempo.Tempo(CIDADE)
+
+# Wake-on-LAN: com "pc_mac", o servidor consegue ligar o PC pela rede (quando roda em outro aparelho).
+PC_MAC = texto_opcional(CFG, "pc_mac", EXEMPLO)
+if PC_MAC and not re.fullmatch(r"[0-9A-Fa-f]{2}([:-]?)[0-9A-Fa-f]{2}(\1[0-9A-Fa-f]{2}){4}", PC_MAC):
+    sys.exit(f'Em {ARQUIVO_CONFIG}, "pc_mac" precisa ser o endereço MAC da placa de rede do PC, como '
+             f'AA:BB:CC:DD:EE:FF (veio "{PC_MAC}").')
+PC_BROADCAST = texto_opcional(CFG, "pc_broadcast", EXEMPLO) or "255.255.255.255"
+try:
+    ipaddress.IPv4Address(PC_BROADCAST)
+except ValueError:
+    sys.exit(f'Em {ARQUIVO_CONFIG}, "pc_broadcast" precisa ser um endereço IPv4, como 192.168.0.255 '
+             f'(veio "{PC_BROADCAST}").')
+
+# Spotify: com o "client_id" do app criado no painel do Spotify; o token fica no spotify_token.json.
+_BLOCO_SPOTIFY = CFG.get("spotify")
+if _BLOCO_SPOTIFY is not None and not isinstance(_BLOCO_SPOTIFY, dict):
+    sys.exit(f'Em {ARQUIVO_CONFIG}, "spotify" precisa ser {TIPOS[dict]}, como em config_servidor.example.json.')
+_EXEMPLO_SPOTIFY = EXEMPLO.get("spotify") if isinstance(EXEMPLO.get("spotify"), dict) else {}
+_CLIENT_ID = texto_opcional(_BLOCO_SPOTIFY or {}, "client_id", _EXEMPLO_SPOTIFY, ' do bloco "spotify"')
+SPOTIFY = spotify.Spotify(_CLIENT_ID, dispositivo=texto_opcional(
+    _BLOCO_SPOTIFY or {}, "dispositivo", _EXEMPLO_SPOTIFY, ' do bloco "spotify"')) if _CLIENT_ID else None
+
+
+def aviso_do_spotify() -> str | None:
+    """Uma linha para o terminal quando o Spotify está configurado."""
+    if SPOTIFY is None:
+        return None
+    if SPOTIFY.conectado():
+        return "[servidor] Spotify conectado."
+    return "[servidor] Spotify ainda não conectado: na pasta celular_servidor, rode python spotify_conectar.py."
+
+
 GROQ_URL = "https://api.groq.com/openai/v1"
 PC_URL = CFG["pc_url"].rstrip("/")
 PC_HEADERS = {"Authorization": f"Bearer {CFG['pc_token']}"}
@@ -166,8 +221,9 @@ LLM_HEADERS = {"Authorization": f"Bearer {CFG['llm_api_key']}"}
 PROMPT_SISTEMA = (
     "Você é uma assistente de voz doméstica em português do Brasil. "
     "Suas respostas serão lidas em voz alta: responda em uma ou duas frases curtas, "
-    "sem markdown, listas ou emojis. Use as ferramentas apenas quando o usuário pedir "
-    "uma ação. Se ele pedir um programa que não está na lista, diga quais estão disponíveis."
+    "sem markdown, listas ou emojis. Use as ferramentas quando o usuário pedir uma ação ou uma "
+    "informação que só elas trazem, como a previsão do tempo. Se ele pedir um programa que não está "
+    "na lista, diga quais estão disponíveis. Se uma ferramenta pedir confirmação, faça a pergunta dela."
 )
 
 DIAS_DA_SEMANA = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado",
@@ -208,20 +264,42 @@ def transcrever(audio: bytes, mime: str) -> str:
 
 # ---------- Ferramentas ----------
 
-def programas_disponiveis() -> list[str]:
-    """Pergunta ao PC quais programas estão liberados. Lista vazia se o PC estiver fora."""
+def consultar_pc(avisar: bool = True) -> dict:
+    """
+    O que o agente do PC oferece: programas que abre, programas que fecha e ações liberadas. Com o PC
+    inacessível vem tudo vazio, e "fora_do_ar" diz se ele nem respondeu (aí o Wake-on-LAN ajuda; com o
+    token errado, não).
+    """
     try:
         r = requests.get(f"{PC_URL}/programas", headers=PC_HEADERS, timeout=3)
         r.raise_for_status()
-        return r.json()["programas"]
-    except requests.RequestException as e:
-        if getattr(e.response, "status_code", None) == 401:
+        dados = r.json()
+    except requests.RequestException as e:  # inclui o JSON inválido
+        status = getattr(e.response, "status_code", None)
+        if avisar and status == 401:
             print("[servidor] o agente do PC recusou o pc_token: ele precisa ser igual ao token do agente.",
                   file=sys.stderr)
-        else:
+        elif avisar:
             print(f"[servidor] não consegui falar com o agente do PC em {PC_URL} (detalhe técnico: {e})",
                   file=sys.stderr)
-        return []
+        return {"programas": [], "fechaveis": [], "acoes": [], "fora_do_ar": status is None}
+
+    def lista(chave: str) -> list[str]:  # agentes antigos só mandam "programas"
+        valor = dados.get(chave) if isinstance(dados, dict) else None
+        return [str(item) for item in valor] if isinstance(valor, list) else []
+
+    return {"programas": lista("programas"), "fechaveis": lista("fechaveis"), "acoes": lista("acoes"),
+            "fora_do_ar": False}
+
+
+def ferramenta(nome: str, descricao: str, propriedades: dict | None = None, obrigatorias=()) -> dict:
+    parametros = {"type": "object", "properties": propriedades or {}}
+    if obrigatorias:
+        parametros["required"] = list(obrigatorias)
+    return {"type": "function", "function": {"name": nome, "description": descricao, "parameters": parametros}}
+
+
+ACOES_DE_VOLUME = ("consultar", "definir", "aumentar", "diminuir", "mudo", "tirar_mudo")
 
 
 FERRAMENTA_LAMPADA = {
@@ -245,26 +323,55 @@ FERRAMENTA_LAMPADA = {
 }
 
 
-def montar_ferramentas(programas: list[str]) -> list[dict]:
+def montar_ferramentas(pc: dict) -> list[dict]:
+    """Só as ferramentas que funcionam agora: o que o agente liberou e o que está configurado no servidor."""
     ferramentas = []
-    if programas:
-        ferramentas.append({
-            "type": "function",
-            "function": {
-                "name": "abrir_programa",
-                "description": "Abre um programa no computador do usuário.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nome": {"type": "string", "enum": programas,
-                                 "description": "Nome do programa a abrir."}
-                    },
-                    "required": ["nome"],
-                },
-            },
-        })
+    if pc["programas"]:
+        ferramentas.append(ferramenta("abrir_programa", "Abre um programa no computador do usuário.", {
+            "nome": {"type": "string", "enum": pc["programas"], "description": "Nome do programa a abrir."}},
+            ["nome"]))
+    if pc["fechaveis"]:
+        ferramentas.append(ferramenta("fechar_programa", "Fecha um programa aberto no computador do usuário.", {
+            "nome": {"type": "string", "enum": pc["fechaveis"], "description": "Nome do programa a fechar."}},
+            ["nome"]))
+    if "volume" in pc["acoes"]:
+        ferramentas.append(ferramenta("volume_do_pc", "Consulta ou muda o volume do som do computador.", {
+            "acao": {"type": "string", "enum": list(ACOES_DE_VOLUME),
+                     "description": "consultar diz o volume atual; definir põe no nível pedido; aumentar e "
+                                    "diminuir mudam o volume em nivel pontos (10 se o usuário não disser "
+                                    "quanto); mudo e tirar_mudo."},
+            "nivel": {"type": "integer", "minimum": 0, "maximum": 100,
+                      "description": "Porcentagem: o volume final em definir, ou quanto mudar em aumentar "
+                                     "e diminuir."}}, ["acao"]))
+    energia = (["bloquear"] if "bloquear" in pc["acoes"] else []) + (
+        ["desligar", "cancelar"] if "desligar" in pc["acoes"] else [])
+    if energia:
+        ferramentas.append(ferramenta(
+            "energia_do_pc", "Bloqueia a tela do computador, desliga o computador ou cancela um desligamento "
+                             "agendado. Para desligar, o servidor pede confirmação ao usuário.", {
+                "acao": {"type": "string", "enum": energia}}, ["acao"]))
+    if pc["fora_do_ar"] and PC_MAC:
+        ferramentas.append(ferramenta(
+            "ligar_pc", "Liga o computador pela rede quando ele está desligado. Use antes de fazer algo no "
+                        "computador, se ele estiver desligado."))
     if LAMPADA is not None:
         ferramentas.append(FERRAMENTA_LAMPADA)
+    ferramentas.append(ferramenta(
+        "previsao_do_tempo", "Consulta a previsão do tempo (temperatura e chuva) de hoje até daqui a 6 dias.", {
+            "cidade": {"type": "string",
+                       "description": f"Cidade, só se o usuário disser uma; sem ela, vale {CIDADE}." if CIDADE
+                       else "Cidade, com a sigla do estado quando ajudar, como Curitiba, PR."},
+            "dias_a_frente": {"type": "integer", "minimum": 0, "maximum": 6,
+                              "description": "0 para agora ou hoje, 1 para amanhã, e assim por diante."}}))
+    if SPOTIFY is not None and SPOTIFY.conectado():
+        ferramentas.append(ferramenta("tocar_musica", "Toca música no Spotify do computador.", {
+            "busca": {"type": "string",
+                      "description": "O que tocar, do jeito que o usuário disse: música, artista, álbum ou playlist."},
+            "tipo": {"type": "string", "enum": list(spotify.TIPOS),
+                     "description": "musica, artista, album ou playlist."}}, ["busca"]))
+        ferramentas.append(ferramenta(
+            "controlar_musica", "Pausa, continua, pula para a próxima ou volta para a anterior no Spotify.", {
+                "acao": {"type": "string", "enum": list(spotify.ACOES)}}, ["acao"]))
     return ferramentas
 
 
@@ -287,19 +394,216 @@ def chamadas_validas(msg: dict) -> list[dict]:
             and isinstance(c.get("function"), dict) and c["function"].get("name")]
 
 
-def executar_ferramenta(nome: str, args: dict) -> dict:
+def pedir_ao_pc(rota: str, dados: dict, timeout: float = 5) -> dict:
+    """Manda um pedido ao agente e devolve o JSON dele; uma queda da rede vira erro em português."""
+    try:
+        r = requests.post(f"{PC_URL}{rota}", headers=PC_HEADERS, json=dados, timeout=timeout)
+        resposta = r.json()
+    except requests.RequestException as e:  # inclui o JSON inválido
+        print(f"[servidor] não consegui falar com o agente do PC em {PC_URL} (detalhe técnico: {e})",
+              file=sys.stderr)
+        return {"erro": "não consegui falar com o computador"}
+    return resposta if isinstance(resposta, dict) else {"erro": "o computador mandou uma resposta que não entendi"}
+
+
+def executar_ferramenta(nome: str, args: dict, pc: dict) -> dict:
     if nome == "abrir_programa":
-        try:
-            r = requests.post(f"{PC_URL}/abrir", headers=PC_HEADERS,
-                              json={"programa": args.get("nome", "")}, timeout=5)
-            return r.json()
-        except requests.RequestException as e:
-            print(f"[servidor] não consegui falar com o agente do PC em {PC_URL} (detalhe técnico: {e})",
-                  file=sys.stderr)
-            return {"erro": "não consegui falar com o computador"}
+        return pedir_ao_pc("/abrir", {"programa": args.get("nome", "")})
+    if nome == "fechar_programa":  # o agente espera uns segundos para conferir se fechou
+        return pedir_ao_pc("/fechar", {"programa": args.get("nome", "")}, timeout=20)
+    if nome == "volume_do_pc":
+        return pedir_ao_pc("/volume", {chave: args[chave] for chave in ("acao", "nivel") if chave in args}, timeout=10)
+    if nome == "energia_do_pc":
+        return energia_do_pc(args, pc)
+    if nome == "ligar_pc":
+        return ligar_pc()
     if nome == "controlar_lampada":
         return controlar_lampada(args)
+    if nome == "previsao_do_tempo":
+        return previsao_do_tempo(args)
+    if nome == "tocar_musica":
+        return tocar_musica(args, pc)
+    if nome == "controlar_musica":
+        return controlar_musica(args)
     return {"erro": f"ferramenta desconhecida: {nome}"}
+
+
+# ---------- Confirmação por voz (desligar o PC) ----------
+
+CONFIRMACAO_SEGUNDOS = 30
+_pendente: dict = {}  # {"acao": "desligar", "ate": instante em que a pergunta vence}
+_trava_pendente = threading.Lock()
+PALAVRAS_SIM = {"sim", "confirmo", "confirma", "pode", "isso", "claro"}
+PALAVRAS_NAO = {"nao", "cancela", "cancelar", "deixa", "esquece", "espera"}
+# Só frases curtas contam: "sim, pode desligar o computador" confirma e "não, obrigado" recusa, mas "sim, e abre
+# o chrome" ou "deixa a luz azul" são outros pedidos e seguem para o LLM.
+PALAVRAS_DA_CONFIRMACAO = PALAVRAS_SIM | {"desligar", "desliga", "o", "pc", "computador", "por", "favor", "quero",
+                                          "tenho", "certeza", "confirmado", "ser", "agora"}
+PALAVRAS_DA_RECUSA = PALAVRAS_NAO | {"o", "pc", "computador", "desligar", "desliga", "desligamento", "pra", "pa",
+                                     "la", "obrigado", "obrigada", "precisa", "quero", "mais", "tarde", "isso"}
+
+
+def guardar_pendente(acao: str) -> None:
+    with _trava_pendente:
+        _pendente.clear()
+        _pendente.update(acao=acao, ate=time.monotonic() + CONFIRMACAO_SEGUNDOS)
+
+
+def tirar_pendente() -> str | None:
+    """A ação esperando confirmação, se a pergunta ainda vale. A pergunta vale para um pedido só."""
+    with _trava_pendente:
+        acao, ate = _pendente.get("acao"), _pendente.get("ate", 0)
+        _pendente.clear()
+    return acao if acao and time.monotonic() <= ate else None
+
+
+def palavras(texto: str) -> list[str]:
+    sem_acento = unicodedata.normalize("NFKD", texto.lower()).encode("ascii", "ignore").decode()
+    return re.findall(r"[a-z]+", sem_acento)
+
+
+def resposta_de_confirmacao(texto: str) -> bool | None:
+    """True para um "sim", False para um "não" e None quando a frase é outro pedido."""
+    lista = palavras(texto)
+    if not lista:
+        return None
+    if lista[0] in PALAVRAS_SIM and all(palavra in PALAVRAS_DA_CONFIRMACAO for palavra in lista):
+        return True
+    if lista[0] in PALAVRAS_NAO and all(palavra in PALAVRAS_DA_RECUSA for palavra in lista):
+        return False
+    return None
+
+
+def energia_do_pc(args: dict, pc: dict) -> dict:
+    acao = args.get("acao")
+    if acao not in ("bloquear", "desligar", "cancelar"):
+        return {"erro": "a ação precisa ser bloquear, desligar ou cancelar"}
+    if acao != "desligar":
+        return pedir_ao_pc("/energia", {"acao": acao}, timeout=10)
+    if pc["fora_do_ar"]:
+        return {"erro": "o computador já está desligado ou fora da rede"}
+    if "desligar" not in pc["acoes"]:
+        return {"erro": "desligar o PC não está liberado no config_agente.json do PC"}
+    # Quem desliga é o próximo pedido, se for um "sim". A pergunta é guardada em conversar, que a devolve
+    # sem passar pelo LLM: um "sim" só pode valer para uma pergunta que a pessoa ouviu do jeito que está aqui.
+    return {"confirmar": True, "pergunta": "Quer mesmo desligar o PC? Diga sim para confirmar."}
+
+
+def cumprir_pendente(acao: str, confirmou: bool) -> tuple[str, list[dict]]:
+    if not confirmou:
+        return "Tudo bem, não vou desligar o PC.", []
+    resultado = pedir_ao_pc("/energia", {"acao": acao}, timeout=10)
+    acoes = [{"ferramenta": "energia_do_pc", "argumentos": {"acao": acao}, "resultado": resultado}]
+    if resultado.get("ok") and resultado.get("descricao"):
+        return f"Tudo bem, {resultado['descricao']}.", acoes
+    return f"Não consegui desligar o PC: {resultado.get('erro') or 'o computador não respondeu'}.", acoes
+
+
+# ---------- Wake-on-LAN ----------
+
+ESPERA_WOL = 90  # segundos até o agente responder; com o boot completo, 60 pode ser pouco
+INTERVALO_WOL = 3
+REENVIO_WOL = 20
+
+
+def pacote_magico(mac: str) -> bytes:
+    return b"\xff" * 6 + bytes.fromhex(re.sub(r"[:-]", "", mac)) * 16
+
+
+def enviar_wol() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for _ in range(3):  # UDP não confirma a entrega
+            sock.sendto(pacote_magico(PC_MAC), (PC_BROADCAST, 9))
+
+
+def ligar_pc() -> dict:
+    """Manda o pacote mágico e espera o agente responder."""
+    if not PC_MAC:
+        return {"erro": 'ligar o PC pela rede não está configurado: preencha "pc_mac" no config_servidor.json'}
+    if not consultar_pc(avisar=False)["fora_do_ar"]:
+        return {"ok": True, "descricao": "o PC já estava ligado"}
+    fim = time.monotonic() + ESPERA_WOL
+    proximo_envio = 0.0
+    while time.monotonic() < fim:
+        if time.monotonic() >= proximo_envio:
+            try:
+                enviar_wol()
+            except OSError as e:
+                print(f"[servidor] não consegui mandar o Wake-on-LAN (detalhe técnico: {e})", file=sys.stderr)
+                return {"erro": "não consegui mandar o sinal para ligar o PC"}
+            proximo_envio = time.monotonic() + REENVIO_WOL
+        time.sleep(INTERVALO_WOL)
+        if not consultar_pc(avisar=False)["fora_do_ar"]:
+            return {"ok": True, "descricao": "liguei o PC"}
+    return {"erro": f"mandei o sinal para ligar o PC, mas o agente não respondeu em {ESPERA_WOL} segundos: se o "
+                    "PC ligou, faça login nele e abra o agente"}
+
+
+# ---------- Previsão do tempo e Spotify ----------
+
+def previsao_do_tempo(args: dict) -> dict:
+    cidade = args.get("cidade")
+    cidade = cidade.strip() if isinstance(cidade, str) else ""
+    try:  # o tempo.py confere dias_a_frente, que vem do LLM ("", 2.0, "2"...)
+        return {"ok": True, **TEMPO.previsao(cidade or None, args.get("dias_a_frente"))}
+    except tempo.ErroNoTempo as e:
+        if e.detalhe:
+            print(f"[servidor] falha na previsão do tempo: {e} (detalhe técnico: {e.detalhe})", file=sys.stderr)
+        return {"erro": str(e)}
+
+
+ESPERA_SPOTIFY = 15  # segundos para o aplicativo abrir e aparecer como dispositivo
+INTERVALO_SPOTIFY = 2
+
+
+def erro_do_spotify(e: "spotify.ErroNoSpotify") -> dict:
+    if e.detalhe:
+        print(f"[servidor] falha no Spotify: {e} (detalhe técnico: {e.detalhe})", file=sys.stderr)
+    return {"erro": str(e)}
+
+
+def tocar_musica(args: dict, pc: dict) -> dict:
+    if SPOTIFY is None:
+        return {"erro": "o Spotify não está configurado no servidor"}
+    busca = args.get("busca")
+    busca = busca.strip() if isinstance(busca, str) else ""
+    tipo = args.get("tipo") or "musica"
+    if not busca:
+        return {"erro": "diga o que tocar"}
+    if not isinstance(tipo, str) or tipo not in spotify.TIPOS:
+        return {"erro": f"o tipo precisa ser {', '.join(spotify.TIPOS)}"}
+    try:
+        return {"ok": True, "descricao": SPOTIFY.tocar(busca, tipo)}
+    except spotify.ErroNoSpotify as e:
+        # O Spotify fechado não aparece como dispositivo: se o agente sabe abrir, abre e tenta de novo.
+        if e.codigo != "sem_dispositivo" or "spotify" not in pc["programas"]:
+            return erro_do_spotify(e)
+    if not pedir_ao_pc("/abrir", {"programa": "spotify"}).get("ok"):
+        return {"erro": "o Spotify não está aberto no PC e não consegui abrir"}
+    fim = time.monotonic() + ESPERA_SPOTIFY
+    while True:
+        time.sleep(INTERVALO_SPOTIFY)
+        try:
+            return {"ok": True, "descricao": f"abri o Spotify e {SPOTIFY.tocar(busca, tipo)}"}
+        except spotify.ErroNoSpotify as e:
+            if e.codigo != "sem_dispositivo":
+                return erro_do_spotify(e)
+            if time.monotonic() >= fim:  # o próprio servidor abriu o aplicativo: não adianta mandar abrir
+                return {"erro": "abri o Spotify no PC, mas ele ainda não apareceu para tocar; peça de novo em "
+                                "alguns segundos"}
+
+
+def controlar_musica(args: dict) -> dict:
+    if SPOTIFY is None:
+        return {"erro": "o Spotify não está configurado no servidor"}
+    acao = args.get("acao")
+    if acao not in spotify.ACOES:
+        return {"erro": f"a ação precisa ser {', '.join(spotify.ACOES)}"}
+    try:
+        return {"ok": True, "descricao": SPOTIFY.controlar(acao)}
+    except spotify.ErroNoSpotify as e:
+        return erro_do_spotify(e)
 
 
 def controlar_lampada(args: dict) -> dict:
@@ -343,21 +647,32 @@ def limpar(texto: str) -> str:
 
 def resumir(acoes: list[dict]) -> str:
     """Resposta de reserva quando o modelo não fecha com um texto: conta o que foi feito."""
-    certas = [a["resultado"] for a in acoes if isinstance(a["resultado"], dict) and a["resultado"].get("ok")]
-    abertos = [r["programa"] for r in certas if r.get("programa")]
+    resultados = [(a["ferramenta"], a["resultado"]) for a in acoes if isinstance(a["resultado"], dict)]
+    abertos = [r["programa"] for nome, r in resultados if nome == "abrir_programa" and r.get("ok") and r.get("programa")]
     feitos = [f"abri {' e '.join(abertos)}"] if abertos else []
-    feitos += [r["descricao"] for r in certas if r.get("descricao")]
-    if feitos:
-        return f"Pronto, {', '.join(feitos)}."
+    feitos += [r["descricao"] for _, r in resultados if r.get("ok") and r.get("descricao")]
+    pergunta = next((r["pergunta"] for _, r in resultados if r.get("confirmar") and r.get("pergunta")), None)
+    if feitos and pergunta:
+        return f"Pronto, {', '.join(feitos)}. {pergunta}"
+    if feitos or pergunta:
+        return f"Pronto, {', '.join(feitos)}." if feitos else pergunta
     return "Fiz o que consegui, mas algo não saiu como esperado."
 
 
 def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
-    programas = programas_disponiveis()
-    ferramentas = montar_ferramentas(programas)
+    pendente = tirar_pendente()
+    if pendente:  # a resposta à pergunta "quer mesmo desligar?" não passa pelo LLM
+        confirmou = resposta_de_confirmacao(texto_usuario)
+        if confirmou is not None:
+            return cumprir_pendente(pendente, confirmou)
+
+    pc = consultar_pc()
+    ferramentas = montar_ferramentas(pc)
     sistema = f"{PROMPT_SISTEMA} {descrever_momento(agora())}"
-    if not programas:
-        sistema += " O computador está desligado ou inacessível agora; avise se pedirem um programa."
+    if not pc["programas"]:
+        sistema += " O computador está desligado ou inacessível agora; avise se pedirem algo nele."
+        if pc["fora_do_ar"] and PC_MAC:
+            sistema += " Se pedirem algo no computador, ligue-o antes com a ferramenta ligar_pc."
 
     mensagens = [{"role": "system", "content": sistema},
                  {"role": "user", "content": texto_usuario}]
@@ -404,10 +719,16 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
             args = ler_argumentos(chamada["function"].get("arguments"))
             chave = (nome, json.dumps(args, sort_keys=True))
             if chave not in executadas:  # modelos pequenos repetem a mesma chamada
-                executadas[chave] = executar_ferramenta(nome, args)
+                executadas[chave] = executar_ferramenta(nome, args, pc)
                 acoes.append({"ferramenta": nome, "argumentos": args, "resultado": executadas[chave]})
+                if nome == "ligar_pc" and executadas[chave].get("ok"):  # o PC ligou: agora dá para usá-lo
+                    pc = consultar_pc()
+                    ferramentas = montar_ferramentas(pc)
             mensagens.append({"role": "tool", "tool_call_id": chamada["id"],
                               "content": json.dumps(executadas[chave], ensure_ascii=False)})
+        if any(isinstance(a["resultado"], dict) and a["resultado"].get("confirmar") for a in acoes):
+            guardar_pendente("desligar")  # o prazo conta a partir de agora, quando a pergunta sai
+            return resumir(acoes), acoes
 
 
 # ---------- Erros das APIs ----------
@@ -542,6 +863,8 @@ if __name__ == "__main__":
     servidor = make_server(HOST, PORTA, app, threaded=True, fd=sock.fileno())
     print(f"[servidor] pronto: abra http://localhost:{sock.getsockname()[1]} no navegador deste aparelho.")
     print(aviso_da_lampada())
+    if aviso_do_spotify():
+        print(aviso_do_spotify())
     print("[servidor] para parar, aperte Ctrl+C.", flush=True)
     servidor.serve_forever()  # o Werkzeug já trata o Ctrl+C
     print("[servidor] encerrado.")

@@ -8,14 +8,23 @@
 
   "pc_url": "http://192.168.0.10:8765",
   "pc_token": "O-MESMO-TOKEN-DO-AGENTE",
+  "pc_mac": "",
+  "pc_broadcast": "",
 
   "host": "127.0.0.1",
   "porta": 8000,
+
+  "cidade": "SUA-CIDADE, UF",
 
   "lampada": {
     "id": "ID-DA-LAMPADA",
     "chave_local": "CHAVE-LOCAL-DA-LAMPADA",
     "ip": "IP-DA-LAMPADA",
     "versao": "VERSAO-DO-SCAN"
+  },
+
+  "spotify": {
+    "client_id": "CLIENT-ID-DO-APP-SPOTIFY",
+    "dispositivo": ""
   }
 }
