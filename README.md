@@ -2,7 +2,7 @@
 
 Você segura o botão de falar numa página e pede: "abre a calculadora", "fecha o chrome", "volume em 30", "acende a luz", "vai chover amanhã?" ou "toca Legião Urbana". Por enquanto, tudo roda no mesmo notebook. A lista completa está em [O que dá para pedir](#o-que-dá-para-pedir).
 
-**Onde o projeto está:** as fases v0.1 (abrir programas e lâmpada) e v0.2 (fechar programas, volume, bloquear e desligar o PC, hora, previsão do tempo e Spotify) estão prontas e testadas por voz no notebook. Da v0.3, já estão prontas a memória curta da conversa e a voz gerada no servidor com o Piper; falta deixar as respostas mais rápidas. O plano completo está no [roadmap.md](roadmap.md).
+**Onde o projeto está:** as fases v0.1 (abrir programas e lâmpada) e v0.2 (fechar programas, volume, bloquear e desligar o PC, hora, previsão do tempo e Spotify) estão prontas e testadas por voz no notebook. A v0.3 também está pronta: memória curta da conversa, voz gerada no servidor com o Piper e respostas mais rápidas, em streaming. O plano completo está no [roadmap.md](roadmap.md).
 
 O projeto tem duas partes:
 
@@ -325,7 +325,25 @@ O segundo comando baixa a voz (cerca de 60 MB) para a pasta `celular_servidor\vo
 - **As vozes em português:** `pt_BR-cadu-medium` (a padrão, a mais bem entendida nos testes), `pt_BR-faber-medium` (fala um pouco mais rápido) e `pt_BR-jeff-medium`. Para trocar, baixe a outra voz com o mesmo comando e mude `"voz"`. As amostras oficiais estão em [huggingface.co/rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
 - **Licenças:** nenhuma voz proíbe uso pessoal, e o Piper se diz feito para uso pessoal e pesquisa. Os dados das vozes em português são de domínio público (CC0), mas elas foram treinadas a partir de uma voz inglesa (lessac) cuja licença só libera pesquisa: em casa o risco é baixo, mas não há permissão explícita, e uso comercial seria arriscado. O `piper-tts` é GPL-3.0-or-later.
 - **A versão fica fixada em 1.7.0:** a 1.8.0 é bloqueada pelo Smart App Control do Windows, e para gerar voz as duas são iguais. O servidor faz uma síntese de teste ao subir; se algo falhar, ele avisa no terminal e a página continua com a voz do navegador.
+- A página recebe a resposta em partes: o que você disse aparece na hora, a resposta aparece quando o LLM termina, e a voz vem frase a frase, com a primeira frase tocando enquanto as outras ainda estão sendo geradas. Apertar o botão de falar cala a assistente, para o microfone não captar a voz dela.
 - Antes de falar, o servidor ajusta o texto do jeito que o Piper lê melhor: "10h33" vira "10 horas e 33", "22°C" vira "22 graus", "R$ 12,50" vira "12 reais e 50 centavos", e emojis e markdown saem.
+
+## Velocidade das respostas
+
+Num pedido simples ("que horas são?"), o servidor leva perto de 1 s até a voz ficar pronta; num comando ("abre a calculadora"), um pouco mais, com o tempo do agente. Para chegar nisso:
+
+- o servidor reaproveita a conexão com o Groq em vez de abrir uma nova a cada chamada;
+- ações que dão certo (abrir e fechar programas, volume, luz, música, bloquear e desligar) respondem com um resumo, como "Pronto, abri calculadora.", sem uma segunda ida ao LLM só para escrever isso. Consultas (previsão, "qual o volume") e erros continuam com a resposta escrita pelo LLM;
+- com o agente do PC desligado, o servidor desiste de conectar em 1 s;
+- a resposta chega em streaming, como explica [Voz do servidor](#voz-do-servidor-opcional).
+
+A cada pedido, o terminal do servidor mostra onde foi o tempo, por exemplo `[servidor] tempos: transcrição 0,4 s · LLM 0,6 s em 1 rodada · voz 0,2 s · total 1,3 s`. Com mais de uma frase, a voz aparece como o tempo "até a 1ª de N frases". Quando um pedido demora, essa linha diz o motivo: o que mais varia é a fila do Groq, que às vezes passa de 2 s.
+
+**Para quem faz outro cliente** (os satélites da visão final, ou um teste com `curl`): `POST /voz` ou `/texto` com o cabeçalho `Accept: application/x-ndjson` recebe uma linha JSON por evento, na ordem: `{"tipo": "transcricao", "texto": ...}`, `{"tipo": "resposta", "texto": ..., "acoes": [...]}`, um `{"tipo": "audio", "audio": ...}` por frase (um WAV em base64, só com a voz do servidor) e `{"tipo": "fim"}`. Se o LLM falhar depois que a resposta começou, vem `{"tipo": "erro", "erro": ...}` no lugar do resto, com status 200. Os erros de antes disso (áudio curto, falha na transcrição, texto vazio) continuam em JSON com o status de sempre (400 ou 502). Sem esse cabeçalho, vale o JSON de sempre, com um `audio` só. Exemplo:
+
+```
+curl -N -H "Accept: application/x-ndjson" -H "Content-Type: application/json" -d "{\"texto\": \"que horas são?\"}" http://localhost:8000/texto
+```
 
 ## Ligar o PC pela rede (Wake-on-LAN, opcional)
 
@@ -468,6 +486,7 @@ Os testes não chamam nenhuma API real. O LLM, a transcrição e a lista de mode
 - a lâmpada: conferência do bloco `lampada`, tradução dos pedidos para os comandos da Tuya e dos erros para o português, e o `tinytuya` de verdade falando com uma lâmpada falsa em `127.0.0.1` nos protocolos 3.3, 3.4 e 3.5, inclusive com chave ou versão erradas e com a lâmpada desligada;
 - fechar programas, volume, bloquear e desligar o PC: os comandos exatos do Windows e do Linux (taskkill, tasklist, pkill, wpctl, pactl, shutdown), com as funções que mexem no PC trocadas por mocks. Nenhum teste muda o volume, bloqueia a tela ou desliga nada; no Windows, só uma leitura do volume real;
 - a confirmação por voz antes de desligar: o que conta como "sim" e como "não", a pergunta que vence e que vale uma vez só;
+- as respostas em streaming: a ordem dos eventos, um WAV por frase, os erros no meio da resposta, o JSON de sempre para quem não pede o streaming e o servidor HTTP de verdade mandando cada linha na hora; na página, a leitura com linhas e acentos cortados entre pedaços, as frases agendadas sem pausa e a volta para a voz do navegador. Os testes da página precisam do Node 18 ou mais novo;
 - a memória curta (o LLM vê os últimos pedidos da mesma conversa, e só dela) e a voz do servidor, com um Piper falso: o texto ajustado para a fala, o áudio na resposta e o servidor seguindo sem voz quando o Piper falha. Com o piper-tts e a voz instalados, um teste gera um áudio de verdade (sem tocar);
 - o Wake-on-LAN, a previsão do tempo (com um Open-Meteo falso) e o Spotify (com uma API falsa: renovação do token, busca, escolha do computador, erros de Premium e de cota, e o `spotify_conectar.py` de ponta a ponta);
 - o diagnóstico `verificar.py`, os scripts do Termux e o `iniciar_agente.bat`.
@@ -564,7 +583,9 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **"não consegui carregar a voz ... --force-redownload"**: o download foi interrompido. Rode o comando de baixar a voz de novo, com `--force-redownload` no fim.
 - **"falta no Windows o Microsoft Visual C++ Redistributable (x64)"**: instale o `vc_redist.x64` do site da Microsoft e suba o servidor de novo.
 - **"o Piper não funciona com acento no caminho da pasta"**: o servidor usa o caminho curto do Windows para contornar isso; se o disco não tiver caminhos curtos, mova o projeto (ou o ambiente virtual) para uma pasta sem acento.
-- **A página fala com a voz do navegador mesmo com a voz do servidor ligada**: o navegador pode bloquear o áudio se a página não recebeu um toque ou clique antes. Use o botão de falar ou o campo de texto, que contam como interação.
+- **A página fala com a voz do navegador mesmo com a voz do servidor ligada**: recarregue a página com Ctrl+F5 (uma aba aberta antes de atualizar o servidor continua com o código antigo). Se aparecer "Não consegui tocar a voz do servidor (...)", o motivo está entre parênteses: "NotAllowedError" é o navegador que não liberou o som (toque no botão de falar ou use o campo de texto antes), "EncodingError" é uma frase que não decodificou e "NotSupportedError" é um navegador sem Web Audio.
+- **"A conexão com o servidor caiu no meio da resposta"**: o servidor parou ou foi reiniciado enquanto respondia. Suba o servidor de novo e repita o pedido.
+- **"a voz do servidor falhou depois de N frases"** (no terminal): o resto daquela resposta ficou sem voz. É raro; o pedido seguinte volta ao normal.
 
 ### Página, Termux e instalação
 

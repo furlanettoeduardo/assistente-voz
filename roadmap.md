@@ -56,6 +56,7 @@ Os satélites vão falar com o cérebro pelo endpoint que a página já usa hoje
 
 Mudanças previstas no contrato:
 
+- quem manda `Accept: application/x-ndjson` recebe a resposta em streaming, uma linha JSON por evento (`transcricao`, `resposta`, um `audio` por frase e `fim`, ou `erro`), o que deixa o satélite começar a falar na primeira frase; sem esse cabeçalho, vale o JSON de sempre;
 - a voz de resposta gerada no servidor, com o Piper, já sai no campo opcional `audio` da resposta: um WAV (16 bits, mono, 22.050 Hz) em base64, que só vem quando a voz do servidor está ligada. Para o ESP32, pode valer um endpoint que devolva o WAV direto, sem base64;
 - aceitar WAV 16 kHz, o formato natural do ESP32 (o servidor já repassa `audio/wav` ao Groq, mas ainda não foi testado com o áudio de um satélite);
 - exigir token dos satélites quando o servidor aceitar conexões da rede (hoje o servidor não pede token em nenhum caso; por isso, por padrão, escuta só em `127.0.0.1`).
@@ -122,11 +123,11 @@ Com a v0.1a e a v0.1b prontas, o MVP está completo.
 - [x] Testar com o PC e as contas de verdade: fechar programas (inclusive a Calculadora da Microsoft Store, que fecha pela moldura da janela), volume, previsão e Spotify
 - [ ] Testar o Wake-on-LAN quando o servidor rodar em outro aparelho (celular ou Raspberry Pi), com o PC no cabo
 
-### v0.3: voz gerada no servidor, memória curta e streaming
+### v0.3: voz gerada no servidor, memória curta e streaming (concluída no notebook)
 
 - [x] Gerar a voz de resposta no servidor com o Piper (vozes pt-BR mais naturais) e devolver o áudio junto com o texto no `/voz` (piper-tts 1.7.0, voz `pt_BR-cadu-medium`, opcional; sem ele, vale a voz do navegador)
 - [x] Manter um histórico curto da conversa para entender "agora apaga ela" (os últimos 4 pedidos de cada conversa, por até 5 minutos parada; a página manda um id por aba)
-- [ ] Reduzir a latência com respostas em streaming
+- [x] Reduzir a latência com respostas em streaming: a voz vem frase a frase em NDJSON (o LLM continua sem stream, porque no Groq isso ganharia só ~0,1 s); além disso, a conexão com o Groq é reaproveitada e as ações que dão certo dispensam a 2ª rodada do LLM. Um "que horas são?" caiu de 5,7 s para perto de 1 s no servidor
 
 ### v0.4: instalador do agente
 
