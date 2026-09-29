@@ -31,7 +31,7 @@ Satélite ESP32-S3 (um por cômodo)                    Raspberry Pi (cérebro)
                                                          → Wake-on-LAN para ligar o PC
 ```
 
-Os aparelhos se comunicam pela rede Wi-Fi de casa, através do roteador; só as chamadas ao Groq (transcrição e LLM) saem para a internet.
+Os aparelhos se comunicam pela rede Wi-Fi de casa, através do roteador. Saem para a internet só as chamadas ao Groq (transcrição e LLM), a consulta da previsão do tempo (Open-Meteo) e, se configurado, o Spotify.
 
 ## Decisões
 
@@ -113,11 +113,13 @@ Com a v0.1a e a v0.1b prontas, o MVP está completo.
 
 ### v0.2: mais ferramentas e Wake-on-LAN
 
-- [ ] Fechar programas e controlar o volume do PC
-- [ ] Ligar o PC com Wake-on-LAN antes de abrir um programa
-- [ ] Bloquear ou desligar o PC, com confirmação por voz
-- [ ] Perguntar horário e previsão do tempo
-- [ ] Tocar músicas no Spotify por voz: uma ferramenta `tocar_musica(busca)` no servidor, que procura pela API do Spotify e toca no app aberto no PC (precisa de conta Premium e de um app no painel de desenvolvedor do Spotify; sem Premium, dá só para abrir o Spotify já na busca)
+- [x] Fechar programas (`fechar` no config do agente, com `taskkill` sem forçar) e controlar o volume do PC (Core Audio pelo `ctypes`, sem dependência nova: volume exato, leitura e mudo)
+- [x] Ligar o PC com Wake-on-LAN antes de abrir um programa (`pc_mac` no config do servidor; só faz sentido com o servidor em outro aparelho)
+- [x] Bloquear ou desligar o PC, com confirmação por voz (a resposta "sim" é conferida no servidor, sem passar pelo LLM)
+- [x] Perguntar horário (a data e a hora vão no prompt) e previsão do tempo (Open-Meteo, sem chave)
+- [x] Tocar músicas no Spotify por voz, com conta Premium: `tocar_musica(busca, tipo)` e `controlar_musica(acao)` no servidor, com login PKCE pelo `spotify_conectar.py`; se o Spotify estiver fechado, o servidor pede ao agente para abrir
+- [ ] Testar com o PC e as contas de verdade: fechar programas (inclusive a Calculadora da Microsoft Store), volume, bloquear, desligar, previsão e Spotify
+- [ ] Testar o Wake-on-LAN quando o servidor rodar em outro aparelho (celular ou Raspberry Pi), com o PC no cabo
 
 ### v0.3: voz gerada no servidor, memória curta e streaming
 
