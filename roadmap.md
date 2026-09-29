@@ -51,7 +51,8 @@ Os aparelhos se comunicam pela rede Wi-Fi de casa, através do roteador. Saem pa
 Os satélites vão falar com o cérebro pelo endpoint que a página já usa hoje:
 
 - `POST /voz` com o áudio cru no corpo e o formato no `Content-Type` (`audio/webm`, `audio/ogg`, `audio/mp4`, `audio/wav` ou `audio/mpeg`);
-- resposta em JSON com `transcricao`, `resposta` (o texto a ser falado) e `acoes` (o que foi executado); em caso de erro, `{"erro": "..."}` em português, com status 400, 500 ou 502.
+- resposta em JSON com `transcricao`, `resposta` (o texto a ser falado) e `acoes` (o que foi executado); em caso de erro, `{"erro": "..."}` em português, com status 400, 500 ou 502;
+- cabeçalho opcional `X-Conversa` com um id por aparelho (letras, números, `-` e `_`, até 64): a memória curta e a confirmação por voz valem só dentro da mesma conversa. Sem ele, vale uma conversa padrão.
 
 Mudanças previstas no contrato:
 
@@ -124,7 +125,7 @@ Com a v0.1a e a v0.1b prontas, o MVP está completo.
 ### v0.3: voz gerada no servidor, memória curta e streaming
 
 - [ ] Gerar a voz de resposta no servidor com o Piper (vozes pt-BR mais naturais) e devolver o áudio junto com o texto no `/voz`
-- [ ] Manter um histórico curto da conversa para entender "agora apaga ela"
+- [x] Manter um histórico curto da conversa para entender "agora apaga ela" (os últimos 4 pedidos de cada conversa, por até 5 minutos parada; a página manda um id por aba)
 - [ ] Reduzir a latência com respostas em streaming
 
 ### v0.4: instalador do agente

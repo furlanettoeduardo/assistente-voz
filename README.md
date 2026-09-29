@@ -116,7 +116,7 @@ Salve os arquivos em UTF-8 (o padrão do Bloco de Notas e do VS Code). Se um con
 
 Exemplos no Linux: `["firefox"]`, `["code"]`, `["spotify"]`, `["nautilus"]`.
 
-4. Opcional: em `fechar`, cadastre os programas que a assistente pode fechar. No Windows, o processo é o nome com `.exe` que aparece no Gerenciador de Tarefas, na aba Detalhes (na aba Processos, clique com o botão direito no programa e escolha "Ir para detalhes"). No Linux, é o nome inteiro do programa, sem a pasta, como aparece em `ps -eo args`. O `explorer.exe` (a barra de tarefas e a área de trabalho) e os processos do próprio Windows são recusados. No Windows, a assistente pede para o programa fechar como se você clicasse no X: se ele tiver algo por salvar, ele pergunta, e ela avisa que ele continua aberto. No Linux, o programa recebe o sinal de encerrar (SIGTERM), e a maioria fecha sem perguntar: salve antes.
+4. Opcional: em `fechar`, cadastre os programas que a assistente pode fechar. No Windows, o processo é o nome com `.exe` que aparece no Gerenciador de Tarefas, na aba Detalhes (na aba Processos, clique com o botão direito no programa e escolha "Ir para detalhes"). No Linux, é o nome inteiro do programa, sem a pasta, como aparece em `ps -eo args`. O `explorer.exe` (a barra de tarefas e a área de trabalho) e os processos do próprio Windows são recusados. Fechar vale para o programa inteiro, inclusive as janelas que você abriu à mão: o Bloco de Notas do Windows 11, por exemplo, abre cada arquivo como uma aba da mesma janela. No Windows, a assistente pede para o programa fechar como se você clicasse no X: se ele tiver algo por salvar, ele pergunta, e ela avisa que ele continua aberto. No Linux, o programa recebe o sinal de encerrar (SIGTERM), e a maioria fecha sem perguntar: salve antes.
 5. Opcional: em `acoes`, libere o volume, o bloqueio da tela e o desligamento. `desligar` só funciona se estiver na lista, e o PC desliga 30 segundos depois do "sim" (no Linux, 1 minuto), fechando os programas sem perguntar: salve o que estiver aberto. Um config antigo, sem `acoes`, passa a liberar `volume` e `bloquear` quando você atualiza o agente.
 
 No Windows, `["cmd", "/c", "start", "", "nome"]` funciona para a maioria dos programas instalados. Nesse formato, um `&` dentro de uma URL precisa virar `^&`. Para caminhos completos, dobre as barras invertidas, que é como o JSON exige: `["C:\\Program Files\\Pasta\\programa.exe"]`. Com barra simples, o JSON dá erro ou, pior, transforma `\t` e `\n` em outros caracteres e o caminho não abre.
@@ -255,6 +255,9 @@ No [modo celular](#rodando-no-celular-opcional), o servidor fala com a lâmpada 
 | "vai chover amanhã?", "como está o tempo em Salvador?" | Consulta a [previsão do tempo](#previsão-do-tempo). |
 | "acende a luz", "deixa a luz azul", "diminui a luz para 30%" | Controla a [lâmpada](#lâmpada-opcional). |
 | "toca Legião Urbana", "toca a playlist Rock Nacional", "pausa a música", "próxima" | Toca no [Spotify](#spotify-opcional-conta-premium) do PC. |
+| "abre o Spotify" e depois "agora fecha ele" | A assistente lembra dos últimos pedidos, como explica o parágrafo abaixo. |
+
+A assistente lembra dos últimos 4 pedidos da mesma conversa: cada aba da página é uma conversa, e ela recomeça do zero depois de 5 minutos parada. Por isso "agora fecha ele" e "aumenta mais" funcionam.
 
 A assistente só oferece ao LLM o que funciona naquele momento: sem o PC ligado, por exemplo, ela não tenta abrir programas e avisa que ele está desligado.
 
