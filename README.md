@@ -501,12 +501,13 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 
 - **"'x' não está na lista de programas que posso fechar"**: cadastre o programa em `fechar` no `config_agente.json` e abra o agente de novo.
 - **"x não está aberto"**: o agente não achou o processo. Confira o nome no Gerenciador de Tarefas, na aba Detalhes, com o `.exe`.
-- **"pedi para fechar x, mas ele continua aberto; talvez esteja esperando você salvar algo"**: o programa pediu para salvar, ou não aceita o pedido de fechar (alguns aplicativos da Microsoft Store, como a Calculadora, podem ignorá-lo). Feche à mão.
+- **"pedi para fechar x, mas ele continua aberto; talvez esteja esperando você salvar algo"**: o programa pediu para salvar, ou não aceita o pedido de fechar. Feche à mão. Os aplicativos da Microsoft Store, como a Calculadora, não têm janela própria (quem desenha a janela é o `ApplicationFrameHost`): o agente fecha a moldura deles, como o X.
 - **"... precisa ter o .exe no fim"** ou **"... precisa ser só o nome do processo"**: em `fechar`, use só o nome do processo, como `"chrome.exe"`, sem pasta. O `ApplicationFrameHost.exe` é recusado (ele fecharia todos os aplicativos da Microsoft Store de uma vez), e o `explorer.exe` também: pedir para ele fechar abre a caixa "Desligar o Windows".
 - **"o controle de volume está desligado no config_agente.json do PC"**, **"bloquear a tela está desligado..."** ou **"desligar o PC não está liberado..."**: acrescente a ação em `acoes` no `config_agente.json` e abra o agente de novo.
 - **"o PC não tem uma saída de som ativa"**: nenhum alto-falante ou fone está ativo no Windows.
 - **"não achei o wpctl nem o pactl para controlar o volume neste PC"** (Linux): instale o PipeWire (`wpctl`) ou o `pulseaudio-utils` (`pactl`).
-- **O volume não muda ou a tela não bloqueia**: o agente precisa rodar na sessão do usuário, na janela aberta pelo `iniciar_agente.bat`, e não como serviço do Windows.
+- **A assistente diz que não consegue fechar programas ou mudar o volume**: o agente ainda está com o config antigo. Depois de mudar o `config_agente.json`, feche o agente e abra de novo.
+- **O volume não muda**: a assistente muda o volume do Windows, não o controle de volume dentro do Spotify; com o Windows já em 100%, "aumenta o volume" não muda nada. Se nem isso funcionar, o agente precisa rodar na sessão do usuário, na janela aberta pelo `iniciar_agente.bat`, e não como serviço do Windows.
 - **Quero cancelar o desligamento**: diga "cancela o desligamento" nos 30 segundos, ou rode `shutdown /a` no PC. **"já existe um desligamento agendado"**: cancele o anterior do mesmo jeito.
 - **O Wake-on-LAN não liga o PC**: confira o `pc_mac` (da placa com cabo), o `pc_broadcast`, o BIOS/UEFI e a placa de rede, como em [Wake-on-LAN](#ligar-o-pc-pela-rede-wake-on-lan-opcional). **"mandei o sinal para ligar o PC, mas o agente não respondeu em 90 segundos"**: o PC pode ter ligado e ficado na tela de login; faça login e abra o agente.
 
