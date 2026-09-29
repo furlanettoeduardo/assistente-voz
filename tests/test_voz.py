@@ -9,10 +9,14 @@ import importlib.util
 import io
 import json
 import os
+import re
 import tempfile
+import threading
+import time
 import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tests.auxiliares import PASTA_SERVIDOR, LLMFalso, resposta_texto
@@ -25,19 +29,51 @@ spec.loader.exec_module(voz)
 NOME = "pt_BR-teste-medium"
 
 
+def frases_do_texto(texto: str) -> list[str]:
+    """Divide o texto em frases como o Piper (pela pontuação final), para os testes saberem o esperado."""
+    return re.split(r"(?<=[.!?])\s+", texto)
+
+
+def amostras_da_frase(frase: str) -> int:
+    """Quantas amostras o PiperFalso gera para uma frase: dá para saber de qual frase veio cada WAV."""
+    return 10 * len(frase) if re.search(r"\w", frase) else 0
+
+
 class PiperFalso:
-    """Imita o PiperVoice: grava 0,1 s de silêncio e guarda os textos recebidos."""
+    """
+    Imita o PiperVoice: synthesize_wav grava 0,1 s de silêncio; synthesize devolve um pedaço por frase,
+    com 10 amostras por caractere da frase. Guarda os textos recebidos. `erro_na_frase` faz a síntese
+    falhar ao chegar na frase com esse índice (0 é a primeira).
+    """
 
     def __init__(self, erro_na_sintese=None):
         self.config = mock.Mock(sample_rate=22050)
         self.textos = []
         self.erro_na_sintese = erro_na_sintese
+        self.erro_na_frase = None
 
     def synthesize_wav(self, texto, wav, set_wav_format=True):
         self.textos.append(texto)
         if self.erro_na_sintese:
             raise self.erro_na_sintese
         wav.writeframes(b"\x00\x00" * 2205)
+
+    def synthesize(self, texto):
+        # Gerador, como o do Piper: cada frase só é gerada quando alguém pede a próxima.
+        self.textos.append(texto)
+        for numero, frase in enumerate(frases_do_texto(texto)):
+            if self.erro_na_sintese:
+                raise self.erro_na_sintese
+            if numero == self.erro_na_frase:
+                raise RuntimeError(f"onnx quebrou na frase {numero}")
+            yield SimpleNamespace(sample_rate=self.config.sample_rate, sample_width=2, sample_channels=1,
+                                  audio_int16_bytes=b"\x01\x00" * amostras_da_frase(frase))
+
+
+def ler_wav(dados: bytes) -> tuple[int, int, int, int]:
+    """Canais, bytes por amostra, taxa e número de amostras de um WAV (falha se não for um WAV válido)."""
+    with wave.open(io.BytesIO(dados)) as wav:
+        return wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getnframes()
 
 
 def criar_arquivos(pasta: Path, nome: str = NOME) -> None:
@@ -103,6 +139,110 @@ class TestVoz(unittest.TestCase):
         self.piper.erro_na_sintese = RuntimeError("onnx quebrou")
         with self.assertRaisesRegex(RuntimeError, "onnx quebrou"):  # e não um wave.Error
             objeto.sintetizar("oi")
+
+    # ---------- frase a frase (streaming) ----------
+
+    def test_frases_um_wav_por_frase_na_ordem(self):
+        objeto = self.criar()
+        wavs = list(objeto.frases("Pronto, abri o **Spotify**. São 10h33! Quer mais alguma coisa?"))
+        esperadas = ["Pronto, abri o Spotify.", "São 10 horas e 33!", "Quer mais alguma coisa?"]
+        self.assertEqual(self.piper.textos[-1], " ".join(esperadas))  # o texto chega normalizado
+        self.assertEqual([ler_wav(dados) for dados in wavs],
+                         [(1, 2, 22050, amostras_da_frase(frase)) for frase in esperadas])
+
+    def test_frases_nada_para_falar(self):
+        objeto = self.criar()
+        for texto in ("", "   ", "...", "👍", None):
+            with self.subTest(texto=texto):
+                self.assertEqual(list(objeto.frases(texto)), [])
+        self.assertEqual(self.piper.textos, [voz.TESTE])  # o Piper nem foi chamado
+
+    def test_frases_ignora_pedacos_vazios(self):
+        objeto = self.criar()
+        wavs = list(objeto.frases("Oi. ... Tchau."))  # a frase do meio não gera áudio
+        self.assertEqual([ler_wav(dados)[3] for dados in wavs], [amostras_da_frase("Oi."), amostras_da_frase("Tchau.")])
+
+    def test_frases_so_sintetiza_quando_pedem_a_proxima(self):
+        objeto = self.criar()
+        frases = objeto.frases("Um. Dois.")
+        self.assertEqual(self.piper.textos, [voz.TESTE])
+        next(frases)
+        self.assertEqual(self.piper.textos, [voz.TESTE, "Um. Dois."])
+        frases.close()  # quem desiste no meio (o cliente sumiu) não deixa nada preso
+
+    def test_frases_falha_no_meio_sobe_e_solta_a_trava(self):
+        objeto = self.criar()
+        self.piper.erro_na_frase = 1
+        frases = objeto.frases("Um. Dois. Três.")
+        self.assertEqual(ler_wav(next(frases))[3], amostras_da_frase("Um."))
+        with self.assertRaisesRegex(RuntimeError, "onnx quebrou na frase 1"):
+            next(frases)
+        self.assertFalse(objeto._trava.locked())
+        self.piper.erro_na_frase = None
+        self.assertEqual(len(list(objeto.frases("De novo. Agora vai."))), 2)  # a voz segue funcionando
+
+    def test_frases_nao_seguram_a_trava_entre_uma_frase_e_outra(self):
+        # Um pedido parado no meio da fala (esperando a rede) não pode travar a voz dos outros.
+        objeto = self.criar()
+        primeiro = objeto.frases("Um. Dois.")
+        next(primeiro)
+        self.assertFalse(objeto._trava.locked())
+        resultado = []
+        outra = threading.Thread(target=lambda: resultado.append(
+            (list(objeto.frases("Três. Quatro.")), objeto.sintetizar("Cinco."))), daemon=True)
+        outra.start()
+        outra.join(timeout=10)
+        self.assertFalse(outra.is_alive(), "a outra thread ficou esperando a trava")
+        frases, wav = resultado[0]
+        self.assertEqual(len(frases), 2)
+        self.assertIsNotNone(wav)
+        self.assertEqual(len(list(primeiro)), 1)  # o primeiro pedido continua de onde parou
+
+    def test_frases_uma_sintese_por_vez_entre_threads(self):
+        piper = PiperFalso()
+        simultaneas = {"agora": 0, "maximo": 0}
+        contador = threading.Lock()
+        synthesize = piper.synthesize
+
+        def synthesize_contando(texto):
+            pedacos = synthesize(texto)
+            while True:
+                with contador:
+                    simultaneas["agora"] += 1
+                    simultaneas["maximo"] = max(simultaneas["maximo"], simultaneas["agora"])
+                try:
+                    time.sleep(0.005)  # o tempo de gerar uma frase
+                    pedaco = next(pedacos, None)
+                finally:
+                    with contador:
+                        simultaneas["agora"] -= 1
+                if pedaco is None:
+                    return
+                yield pedaco
+
+        piper.synthesize = synthesize_contando
+        objeto = self.criar(piper)
+        resultados, erros = [], []
+
+        def falar(numero):
+            try:
+                for _ in range(5):
+                    amostras = [ler_wav(dados)[3] for dados in objeto.frases(f"Pedido {numero}. Fim.")]
+                    resultados.append((numero, amostras))
+            except Exception as e:  # a thread não tem outro jeito de avisar o teste
+                erros.append(e)
+
+        threads = [threading.Thread(target=falar, args=(numero,), daemon=True) for numero in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        self.assertFalse(any(thread.is_alive() for thread in threads), "alguma thread travou")
+        self.assertEqual(erros, [])
+        self.assertEqual(simultaneas["maximo"], 1)
+        self.assertEqual(sorted(resultados), sorted(
+            (numero, [amostras_da_frase(f"Pedido {numero}."), amostras_da_frase("Fim.")])
+            for numero in range(3) for _ in range(5)))
 
     def test_erros_ao_preparar(self):
         def carregar_com(erro):
@@ -208,6 +348,15 @@ class TestPiperDeVerdade(unittest.TestCase):
         with wave.open(io.BytesIO(dados)) as wav:
             self.assertEqual(wav.getframerate(), 22050)
             self.assertGreater(wav.getnframes() / wav.getframerate(), 1.0)  # mais de 1 s de fala
+
+    def test_frase_a_frase(self):
+        objeto = voz.Voz("pt_BR-cadu-medium")
+        wavs = list(objeto.frases("Pronto, abri o Spotify. São 10h33."))
+        self.assertEqual(len(wavs), 2)
+        for dados in wavs:
+            canais, largura, taxa, amostras = ler_wav(dados)
+            self.assertEqual((canais, largura, taxa), (1, 2, 22050))
+            self.assertGreater(amostras / taxa, 0.5)  # cada frase tem fala de verdade
 
 
 @PRECISA_DEPENDENCIAS

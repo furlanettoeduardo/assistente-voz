@@ -15,6 +15,7 @@ import sys
 import threading
 import unicodedata
 import wave
+from collections.abc import Iterator
 from pathlib import Path
 
 PASTA_VOZES = Path(__file__).parent / "vozes"
@@ -155,6 +156,38 @@ class Voz:
             self._piper.synthesize_wav(texto, wav, set_wav_format=False)
         dados = buffer.getvalue()
         return dados if len(dados) > 44 else None  # 44 bytes é só o cabeçalho
+
+    def frases(self, texto: str) -> Iterator[bytes]:
+        """
+        Um WAV completo por frase, na ordem da fala, para a página começar a tocar antes do fim; nada
+        quando não sobra o que falar. O Piper já divide o texto em frases (um pedaço por frase).
+        """
+        texto = normalizar(texto or "")
+        if not re.search(r"\w", texto):  # "", "..." ou só emoji: o Piper quebraria
+            return
+        with self._trava:
+            pedacos = iter(self._piper.synthesize(texto))
+        while True:
+            # A trava vale só para gerar a próxima frase: quem consome o gerador pode demorar entre uma
+            # frase e outra (a rede, um cliente que sumiu), e os outros pedidos não ficam esperando por isso.
+            with self._trava:
+                pedaco = next(pedacos, None)
+            if pedaco is None:
+                return
+            amostras = pedaco.audio_int16_bytes  # no Piper, cada leitura converte e copia o áudio de novo
+            if amostras:
+                yield _wav(amostras, pedaco.sample_rate, pedaco.sample_width, pedaco.sample_channels)
+
+
+def _wav(amostras: bytes, taxa: int, largura: int, canais: int) -> bytes:
+    """Monta um arquivo WAV em memória com as amostras dadas."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(canais)
+        wav.setsampwidth(largura)
+        wav.setframerate(taxa)
+        wav.writeframes(amostras)
+    return buffer.getvalue()
 
 
 def _bloqueio(erro: ImportError) -> ErroNaVoz:
