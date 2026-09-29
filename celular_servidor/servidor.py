@@ -2,6 +2,8 @@
 Servidor do celular (roda no Termux ou, durante o desenvolvimento, no próprio PC).
 
 Fluxo: áudio -> Whisper (Groq) -> LLM com ferramentas -> agente do PC -> resposta em texto.
+Quem manda "Accept: application/x-ndjson" (a página) recebe a resposta em streaming, um evento JSON por
+linha, com a voz frase a frase; os outros (satélites, curl) recebem um JSON só, como sempre.
 
 Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo aparelho.
 """
@@ -18,13 +20,14 @@ import threading
 import time
 import traceback
 import unicodedata
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
     import requests
-    from flask import Flask, jsonify, request, send_from_directory
+    from flask import Flask, Response, jsonify, request, send_from_directory
     from werkzeug.exceptions import HTTPException
     from werkzeug.serving import make_server
 except ImportError as e:  # o .venv não foi ativado ou o requirements não foi instalado
@@ -889,14 +892,104 @@ def mostrar_tempos(tempos: dict) -> None:
         partes.append(f"LLM {tempos['llm']:.1f} s em {rodadas} {'rodada' if rodadas == 1 else 'rodadas'}")
     if tempos.get("ferramentas"):
         partes.append(f"ferramentas {tempos['ferramentas']:.1f} s")
-    if "voz" in tempos:
-        partes.append(f"voz {tempos['voz']:.1f} s")
+    if "voz" in tempos:  # no streaming, até a 1ª frase ficar pronta
+        frases = tempos.get("frases", 0)
+        partes.append(f"voz {tempos['voz']:.1f} s" + (f" até a 1ª de {frases} frases" if frases > 1 else ""))
     partes.append(f"total {time.monotonic() - tempos['inicio']:.1f} s")
     print(f"[servidor] tempos: {' · '.join(partes)}".replace(".", ","), flush=True)
 
 
+# ---------- Resposta em streaming (NDJSON) ----------
+
+TIPO_NDJSON = "application/x-ndjson"
+ERRO_INESPERADO = "Erro inesperado no servidor. Veja o terminal do Termux e tente de novo."
+
+
+def registrar_erro_inesperado(e: Exception) -> None:
+    traceback.print_exception(e)
+    print("[servidor] erro inesperado ao atender o pedido; detalhes acima.", file=sys.stderr)
+
+
+def quer_streaming() -> bool:
+    """Só quem pede NDJSON no Accept recebe o streaming; sem Accept, com */* ou com JSON, vale o JSON."""
+    return request.accept_mimetypes.best_match(["application/json", TIPO_NDJSON]) == TIPO_NDJSON
+
+
+# Quebras de linha que o json.dumps deixa passar sem escape, mas que um str.splitlines() do outro lado cortaria.
+_QUEBRAS_UNICODE = {0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"}
+
+
+def linha_ndjson(**evento) -> bytes:
+    """
+    Um evento do streaming: um objeto JSON numa linha só. O json.dumps já escapa o \\n e o \\r; as quebras do
+    Unicode e a metade solta de um emoji (que o UTF-8 não aceita) saem como \\uXXXX, como no JSON de sempre.
+    """
+    linha = json.dumps(evento, ensure_ascii=False)
+    if not linha.isascii():  # os áudios (base64) não passam por aqui
+        linha = linha.translate(_QUEBRAS_UNICODE)
+    return (linha + "\n").encode("utf-8", "backslashreplace")
+
+
+def audios_por_frase(texto: str, tempos: dict) -> Iterator[str]:
+    """
+    A resposta falada pela voz do servidor, uma frase por vez, cada uma um WAV em base64. Se a voz falhar,
+    o motivo fica no terminal e as frases param ali: o texto já foi, e a voz é um extra.
+    """
+    if VOZ is None:
+        return
+    inicio = time.monotonic()
+    frases = VOZ.frases(texto)
+    enviadas = 0
+    while True:
+        try:
+            wav = next(frases, None)
+        except Exception as e:
+            if enviadas:
+                print(f"[servidor] a voz do servidor falhou depois de {enviadas} "
+                      f"{'frase' if enviadas == 1 else 'frases'}; as seguintes ficam sem a voz do servidor "
+                      f"(detalhe técnico: {e!r})", file=sys.stderr)
+            else:
+                print(f"[servidor] a voz do servidor falhou; a página usa a do navegador (detalhe técnico: {e!r})",
+                      file=sys.stderr)
+            break
+        if wav is None:
+            break
+        if not enviadas:
+            tempos["voz"] = time.monotonic() - inicio  # o que a pessoa espera até ouvir alguma coisa
+        enviadas += 1
+        tempos["frases"] = enviadas
+        yield base64.b64encode(wav).decode("ascii")
+    tempos.setdefault("voz", time.monotonic() - inicio)
+
+
+def eventos(frase: str, conversa: str, tempos: dict) -> Iterator[bytes]:
+    """
+    As linhas do streaming: transcricao, resposta, um audio por frase e fim; ou erro no lugar da resposta
+    e do fim (numa falha inesperada depois da resposta, só no lugar do fim). Roda depois que a rota já
+    voltou, então não pode usar o request.
+    """
+    try:
+        yield linha_ndjson(tipo="transcricao", texto=frase)
+        try:
+            resposta, acoes = conversar(frase, conversa, tempos)
+        except requests.RequestException as e:
+            yield linha_ndjson(tipo="erro", erro=explicar_erro(e, "a API do LLM"))
+            return
+        yield linha_ndjson(tipo="resposta", texto=resposta, acoes=acoes)
+        for audio in audios_por_frase(resposta, tempos):
+            yield linha_ndjson(tipo="audio", audio=audio)
+        mostrar_tempos(tempos)
+        yield linha_ndjson(tipo="fim")
+    except Exception as e:  # aqui o errorhandler do Flask não vale: sem isto, a conexão cairia sem explicação
+        registrar_erro_inesperado(e)
+        yield linha_ndjson(tipo="erro", erro=ERRO_INESPERADO)
+
+
 def responder(frase: str, conversa: str, tempos: dict | None = None):
     tempos = tempos if tempos is not None else {"inicio": time.monotonic()}
+    if quer_streaming():
+        # Sem Content-Length, o Werkzeug manda em partes (chunked) e envia cada linha assim que ela sai.
+        return Response(eventos(frase, conversa, tempos), content_type=f"{TIPO_NDJSON}; charset=utf-8")
     try:
         resposta, acoes = conversar(frase, conversa, tempos)
     except requests.RequestException as e:
@@ -929,9 +1022,16 @@ def erro_http(e):
 
 @app.errorhandler(Exception)
 def erro_inesperado(e):
-    traceback.print_exception(e)
-    print("[servidor] erro inesperado ao atender o pedido; detalhes acima.", file=sys.stderr)
-    return jsonify(erro="Erro inesperado no servidor. Veja o terminal do Termux e tente de novo."), 500
+    registrar_erro_inesperado(e)
+    return jsonify(erro=ERRO_INESPERADO), 500
+
+
+@app.after_request
+def variar_com_accept(resposta):
+    """/voz e /texto respondem em JSON ou em NDJSON conforme o Accept: um cache precisa saber disso."""
+    if request.endpoint in ("voz", "texto"):
+        resposta.vary.add("Accept")
+    return resposta
 
 
 @app.get("/")
