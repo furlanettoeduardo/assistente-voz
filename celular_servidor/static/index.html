@@ -66,6 +66,9 @@
 </main>
 
 <script>
+// Cada aba é uma conversa: o servidor lembra dos últimos pedidos dela ("agora fecha ele").
+const CONVERSA = (self.crypto && crypto.randomUUID) ? crypto.randomUUID()
+  : Date.now().toString(36) + Math.random().toString(36).slice(2);
 const botao = document.getElementById("falar");
 const status = document.getElementById("status");
 const historico = document.getElementById("historico");
@@ -178,7 +181,7 @@ async function comecar(ev) {
       gravador = null;
       if (duracao < 400) return mostrar("Segure o botão enquanto fala.", true);
       const audio = new Blob(pedacos, { type: mime });
-      enviar("/voz", { method: "POST", headers: { "Content-Type": mime }, body: audio });
+      enviar("/voz", { method: "POST", headers: { "Content-Type": mime, "X-Conversa": CONVERSA }, body: audio });
     };
     inicio = Date.now();
     gravador.start();
@@ -210,7 +213,7 @@ document.getElementById("formTexto").addEventListener("submit", e => {
   if (!texto) return;
   campo.value = "";
   enviar("/texto", { method: "POST", headers: { "Content-Type": "application/json" },
-                     body: JSON.stringify({ texto }) });
+                     body: JSON.stringify({ texto, conversa: CONVERSA }) });
 });
 
 if ("speechSynthesis" in window) speechSynthesis.getVoices(); // pré-carrega as vozes

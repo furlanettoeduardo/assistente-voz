@@ -156,6 +156,7 @@ class TestServidor(unittest.TestCase):
     def setUp(self):
         self.marcador.unlink(missing_ok=True)
         self.llm.zerar()
+        self.servidor._memorias.clear()  # cada teste começa uma conversa nova
         self.cliente = self.servidor.app.test_client()
         self.popen = vigiar_popen(self, self.agente)
         pilha = contextlib.ExitStack()

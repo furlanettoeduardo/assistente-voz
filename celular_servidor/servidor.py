@@ -429,10 +429,53 @@ def executar_ferramenta(nome: str, args: dict, pc: dict) -> dict:
     return {"erro": f"ferramenta desconhecida: {nome}"}
 
 
+# ---------- Memória curta da conversa ----------
+
+CONVERSA_PADRAO = "padrao"  # quem não manda um id (um satélite antigo, um teste com curl)
+MEMORIA_PEDIDOS = 4  # quantos pedidos anteriores o LLM vê: o bastante para "agora fecha ele"
+MEMORIA_SEGUNDOS = 300  # parada por 5 minutos, a conversa recomeça do zero
+MEMORIA_CONVERSAS = 50  # limite de conversas guardadas ao mesmo tempo
+_memorias: dict = {}  # conversa -> {"pedidos": [[mensagens de um pedido], ...], "ate": instante}
+_trava_memoria = threading.Lock()
+
+
+def ler_conversa(valor) -> str:
+    """O id de conversa que a página (ou o satélite) manda; qualquer coisa estranha vira a conversa padrão."""
+    if isinstance(valor, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", valor):
+        return valor
+    return CONVERSA_PADRAO
+
+
+def lembrar(conversa: str) -> list[dict]:
+    """As mensagens dos últimos pedidos desta conversa, na ordem, se ela não ficou parada tempo demais."""
+    with _trava_memoria:
+        memoria = _memorias.get(conversa)
+        if memoria is None or time.monotonic() > memoria["ate"]:
+            _memorias.pop(conversa, None)
+            return []
+        return [mensagem for pedido in memoria["pedidos"] for mensagem in pedido]
+
+
+def guardar_pedido(conversa: str, mensagens: list[dict]) -> None:
+    """Guarda um pedido inteiro (usuário, chamadas de ferramenta, resultados e a resposta final)."""
+    limpas = [{**m, "content": limpar(m["content"])} if m["role"] == "assistant" and m.get("content") else m
+              for m in mensagens]
+    agora_ = time.monotonic()
+    with _trava_memoria:
+        for vencida in [c for c, m in _memorias.items() if agora_ > m["ate"]]:
+            del _memorias[vencida]
+        memoria = _memorias.pop(conversa, {"pedidos": []})  # volta para o fim: é a mais recente
+        memoria["pedidos"] = (memoria["pedidos"] + [limpas])[-MEMORIA_PEDIDOS:]
+        memoria["ate"] = agora_ + MEMORIA_SEGUNDOS
+        _memorias[conversa] = memoria
+        while len(_memorias) > MEMORIA_CONVERSAS:
+            del _memorias[next(iter(_memorias))]  # a mais antiga
+
+
 # ---------- Confirmação por voz (desligar o PC) ----------
 
 CONFIRMACAO_SEGUNDOS = 30
-_pendente: dict = {}  # {"acao": "desligar", "ate": instante em que a pergunta vence}
+_pendentes: dict = {}  # conversa -> {"acao": "desligar", "ate": instante em que a pergunta vence}
 _trava_pendente = threading.Lock()
 PALAVRAS_SIM = {"sim", "confirmo", "confirma", "pode", "isso", "claro"}
 PALAVRAS_NAO = {"nao", "cancela", "cancelar", "deixa", "esquece", "espera"}
@@ -444,18 +487,19 @@ PALAVRAS_DA_RECUSA = PALAVRAS_NAO | {"o", "pc", "computador", "desligar", "desli
                                      "la", "obrigado", "obrigada", "precisa", "quero", "mais", "tarde", "isso"}
 
 
-def guardar_pendente(acao: str) -> None:
+def guardar_pendente(acao: str, conversa: str = CONVERSA_PADRAO) -> None:
     with _trava_pendente:
-        _pendente.clear()
-        _pendente.update(acao=acao, ate=time.monotonic() + CONFIRMACAO_SEGUNDOS)
+        _pendentes[conversa] = {"acao": acao, "ate": time.monotonic() + CONFIRMACAO_SEGUNDOS}
 
 
-def tirar_pendente() -> str | None:
-    """A ação esperando confirmação, se a pergunta ainda vale. A pergunta vale para um pedido só."""
+def tirar_pendente(conversa: str = CONVERSA_PADRAO) -> str | None:
+    """
+    A ação esperando confirmação nesta conversa, se a pergunta ainda vale. A pergunta vale para um pedido
+    só, e só na conversa em que foi feita: um "sim" dito em outro aparelho não desliga nada.
+    """
     with _trava_pendente:
-        acao, ate = _pendente.get("acao"), _pendente.get("ate", 0)
-        _pendente.clear()
-    return acao if acao and time.monotonic() <= ate else None
+        pendente = _pendentes.pop(conversa, None) or {}
+    return pendente.get("acao") if pendente and time.monotonic() <= pendente["ate"] else None
 
 
 def palavras(texto: str) -> list[str]:
@@ -660,12 +704,16 @@ def resumir(acoes: list[dict]) -> str:
     return "Fiz o que consegui, mas algo não saiu como esperado."
 
 
-def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
-    pendente = tirar_pendente()
+def conversar(texto_usuario: str, conversa: str = CONVERSA_PADRAO) -> tuple[str, list[dict]]:
+    historico = lembrar(conversa)
+    pendente = tirar_pendente(conversa)
     if pendente:  # a resposta à pergunta "quer mesmo desligar?" não passa pelo LLM
         confirmou = resposta_de_confirmacao(texto_usuario)
         if confirmou is not None:
-            return cumprir_pendente(pendente, confirmou)
+            resposta, acoes = cumprir_pendente(pendente, confirmou)
+            guardar_pedido(conversa, [{"role": "user", "content": texto_usuario},
+                                      {"role": "assistant", "content": resposta}])
+            return resposta, acoes
 
     pc = consultar_pc()
     ferramentas = montar_ferramentas(pc)
@@ -675,10 +723,14 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
         if pc["fora_do_ar"] and PC_MAC:
             sistema += " Se pedirem algo no computador, ligue-o antes com a ferramenta ligar_pc."
 
-    mensagens = [{"role": "system", "content": sistema},
-                 {"role": "user", "content": texto_usuario}]
+    mensagens = [{"role": "system", "content": sistema}, *historico, {"role": "user", "content": texto_usuario}]
+    inicio = len(mensagens) - 1  # daqui em diante é este pedido, que vai para a memória
     acoes = []
     executadas = {}  # (ferramenta, argumentos) -> resultado
+
+    def terminar(resposta: str) -> tuple[str, list[dict]]:
+        guardar_pedido(conversa, mensagens[inicio:] + [{"role": "assistant", "content": resposta}])
+        return resposta, acoes
 
     for rodada in range(1, 4):  # no máximo 3 rodadas por comando
         ultima = rodada == 3
@@ -703,15 +755,15 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
             # ferramenta mesmo com tool_choice="none".
             detalhe = e.response.text[:500] if getattr(e, "response", None) is not None else repr(e)
             print(f"[servidor] a API do LLM falhou depois das ações (detalhe técnico: {detalhe})", file=sys.stderr)
-            return resumir(acoes), acoes
+            return terminar(resumir(acoes))
         chamadas = chamadas_validas(msg)
 
         if not chamadas:
-            return limpar(msg.get("content")), acoes
+            return terminar(limpar(msg.get("content")))
         if ultima:
             # Backend que ignora tool_choice="none" (o Ollama, por exemplo): não executa nada, e o texto
             # que acompanha a chamada ("Pronto, abri o navegador.") não vale, porque nada foi aberto.
-            return resumir(acoes), acoes
+            return terminar(resumir(acoes))
 
         mensagens.append({"role": "assistant", "content": msg.get("content") or "",
                           "tool_calls": chamadas})
@@ -728,8 +780,8 @@ def conversar(texto_usuario: str) -> tuple[str, list[dict]]:
             mensagens.append({"role": "tool", "tool_call_id": chamada["id"],
                               "content": json.dumps(executadas[chave], ensure_ascii=False)})
         if any(isinstance(a["resultado"], dict) and a["resultado"].get("confirmar") for a in acoes):
-            guardar_pendente("desligar")  # o prazo conta a partir de agora, quando a pergunta sai
-            return resumir(acoes), acoes
+            guardar_pendente("desligar", conversa)  # o prazo conta a partir de agora, quando a pergunta sai
+            return terminar(resumir(acoes))
 
 
 # ---------- Erros das APIs ----------
@@ -768,9 +820,9 @@ def explicar_erro(e: requests.RequestException, servico: str) -> str:
     return f"{servico_maiusculo} recusou o pedido (erro {status}). Veja os detalhes no terminal do servidor."
 
 
-def responder(frase: str):
+def responder(frase: str, conversa: str):
     try:
-        resposta, acoes = conversar(frase)
+        resposta, acoes = conversar(frase, conversa)
     except requests.RequestException as e:
         return jsonify(erro=explicar_erro(e, "a API do LLM")), 502
     return jsonify(transcricao=frase, resposta=resposta, acoes=acoes)
@@ -814,7 +866,7 @@ def voz():
         return jsonify(erro=explicar_erro(e, "a API de transcrição")), 502
     if not texto:
         return jsonify(erro="Não entendi nada no áudio. Tente de novo."), 400
-    return responder(texto)
+    return responder(texto, ler_conversa(request.headers.get("X-Conversa")))
 
 
 @app.post("/texto")
@@ -824,7 +876,8 @@ def texto():
     frase = frase.strip() if isinstance(frase, str) else ""
     if not frase:
         return jsonify(erro="Digite um comando."), 400
-    return responder(frase)
+    conversa = dados.get("conversa") if isinstance(dados, dict) else None
+    return responder(frase, ler_conversa(conversa or request.headers.get("X-Conversa")))
 
 
 def abrir_socket(host: str, porta: int) -> socket.socket:

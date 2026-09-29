@@ -101,7 +101,8 @@ class TestFerramentasDoPC(unittest.TestCase):
             patcher = mock.patch.object(self.agente.sistema, nome, getattr(self.sistema, nome))
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.servidor.tirar_pendente()  # nenhuma pergunta de outro teste fica valendo
+        self.servidor._pendentes.clear()  # nenhuma pergunta de outro teste fica valendo
+        self.servidor._memorias.clear()
         pilha = contextlib.ExitStack()
         self.addCleanup(pilha.close)
         pilha.enter_context(contextlib.redirect_stdout(io.StringIO()))
