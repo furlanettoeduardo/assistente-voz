@@ -157,6 +157,11 @@ class TestServidor(unittest.TestCase):
         self.marcador.unlink(missing_ok=True)
         self.llm.zerar()
         self.servidor._memorias.clear()  # cada teste começa uma conversa nova
+        # Estes testes conferem o laço de rodadas com o LLM; o atalho que pula a 2ª rodada quando as ações dão
+        # certo tem testes próprios em test_ferramentas.py.
+        atalho = mock.patch.object(self.servidor, "dispensa_segunda_rodada", return_value=False)
+        atalho.start()
+        self.addCleanup(atalho.stop)
         self.cliente = self.servidor.app.test_client()
         self.popen = vigiar_popen(self, self.agente)
         pilha = contextlib.ExitStack()

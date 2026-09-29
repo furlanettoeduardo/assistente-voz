@@ -175,6 +175,43 @@ class TestFerramentasDoPC(unittest.TestCase):
         self.assertEqual(dados["acoes"][0]["resultado"]["descricao"], "bloqueei a tela")
         self.sistema.bloquear.assert_called_once_with()
 
+    # ---------- ações que dão certo dispensam a 2ª rodada ----------
+
+    def test_acao_que_deu_certo_responde_sem_outra_rodada(self):
+        self.llm.programar(resposta_ferramenta("c1", "abrir_programa", {"nome": PROGRAMA}),
+                           resposta_ferramenta("c2", "volume_do_pc", {"acao": "definir", "nivel": 30}),
+                           resposta_texto("não deveria ser usado"))
+        dados = self.enviar("abre o programa de teste")
+        self.assertEqual(dados["resposta"], f"Pronto, abri {PROGRAMA}.")
+        self.assertEqual(len(self.llm.pedidos_de_chat()), 1)
+        self.llm.zerar()
+        self.llm.programar(resposta_ferramenta("c1", "volume_do_pc", {"acao": "definir", "nivel": 30}))
+        self.assertEqual(self.enviar("volume em 30")["resposta"], "Pronto, deixei o volume em 30%.")
+
+    def test_consultas_e_erros_voltam_ao_llm(self):
+        self.trocar("TEMPO", TempoDeMentira())
+        casos = [
+            ("qual o volume?", resposta_ferramenta("c1", "volume_do_pc", {"acao": "consultar"})),
+            ("vai chover?", resposta_ferramenta("c1", "previsao_do_tempo", {})),
+            ("fecha o paint", resposta_ferramenta("c1", "fechar_programa", {"nome": "paint"})),  # erro do agente
+            ("abre e diz o tempo", {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "abrir_programa",
+                                                              "arguments": f'{{"nome": "{PROGRAMA}"}}'}},
+                {"id": "c2", "type": "function", "function": {"name": "previsao_do_tempo", "arguments": "{}"}}]}}]}),
+        ]
+        for pedido, chamada in casos:
+            with self.subTest(pedido=pedido):
+                self.llm.zerar()
+                self.llm.programar(chamada, resposta_texto("Resposta do LLM."))
+                self.assertEqual(self.enviar(pedido)["resposta"], "Resposta do LLM.")
+                self.assertEqual(len(self.llm.pedidos_de_chat()), 2)
+
+    def test_linha_de_tempos_no_terminal(self):
+        self.llm.programar(resposta_texto("Oi."))
+        with contextlib.redirect_stdout(io.StringIO()) as saida:
+            self.enviar("oi")
+        self.assertRegex(saida.getvalue(), r"\[servidor\] tempos: LLM \d+,\d s em 1 rodada · total \d+,\d s")
+
     # ---------- desligar com confirmação ----------
 
     def pedir_para_desligar(self) -> dict:

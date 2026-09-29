@@ -69,6 +69,9 @@ class TestMemoria(unittest.TestCase):
         return self.llm.pedidos_de_chat()[pedido]["json"]["messages"][1:]
 
     def test_o_llm_ve_o_pedido_anterior(self):
+        atalho = mock.patch.object(self.servidor, "dispensa_segunda_rodada", return_value=False)
+        atalho.start()  # a resposta final vem do LLM, com o <think> que a memória limpa
+        self.addCleanup(atalho.stop)
         self.llm.programar(resposta_ferramenta("c1", "abrir_programa", {"nome": PROGRAMA}),
                            resposta_texto("<think>ok</think>Abri o programa de teste."),
                            resposta_texto("Qual programa?"))

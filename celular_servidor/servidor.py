@@ -227,6 +227,9 @@ def aviso_do_spotify() -> str | None:
 
 
 GROQ_URL = "https://api.groq.com/openai/v1"
+# Uma sessão só para o Groq e o agente: reaproveitar a conexão poupa uns 0,26 s por chamada (o TLS e o
+# carregamento dos certificados), e cada comando faz de 2 a 3 chamadas.
+SESSAO = requests.Session()
 PC_URL = CFG["pc_url"].rstrip("/")
 PC_HEADERS = {"Authorization": f"Bearer {CFG['pc_token']}"}
 LLM_URL = CFG["llm_base_url"].rstrip("/")
@@ -266,7 +269,7 @@ def transcrever(audio: bytes, mime: str) -> str:
     mime = (mime or "audio/webm").split(";")[0]
     extensao = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a",
                 "audio/wav": "wav", "audio/mpeg": "mp3"}.get(mime, "webm")
-    r = requests.post(
+    r = SESSAO.post(
         f"{GROQ_URL}/audio/transcriptions",
         headers={"Authorization": f"Bearer {CFG['groq_api_key']}"},
         files={"file": (f"audio.{extensao}", audio, mime)},
@@ -286,7 +289,8 @@ def consultar_pc(avisar: bool = True) -> dict:
     token errado, não).
     """
     try:
-        r = requests.get(f"{PC_URL}/programas", headers=PC_HEADERS, timeout=3)
+        # Conectar leva 1 s no máximo: no Windows, uma porta fechada faz o pedido insistir por 2 s.
+        r = SESSAO.get(f"{PC_URL}/programas", headers=PC_HEADERS, timeout=(1, 3))
         r.raise_for_status()
         dados = r.json()
     except requests.RequestException as e:  # inclui o JSON inválido
@@ -412,7 +416,7 @@ def chamadas_validas(msg: dict) -> list[dict]:
 def pedir_ao_pc(rota: str, dados: dict, timeout: float = 5) -> dict:
     """Manda um pedido ao agente e devolve o JSON dele; uma queda da rede vira erro em português."""
     try:
-        r = requests.post(f"{PC_URL}{rota}", headers=PC_HEADERS, json=dados, timeout=timeout)
+        r = SESSAO.post(f"{PC_URL}{rota}", headers=PC_HEADERS, json=dados, timeout=timeout)
         resposta = r.json()
     except requests.RequestException as e:  # inclui o JSON inválido
         print(f"[servidor] não consegui falar com o agente do PC em {PC_URL} (detalhe técnico: {e})",
@@ -707,6 +711,20 @@ def limpar(texto: str) -> str:
     return texto.strip()
 
 
+# Ações que, dando certo, não precisam de outra ida ao LLM só para dizer "pronto": o resumo diz. As consultas
+# (previsão do tempo, "qual o volume") e o ligar_pc, que abre caminho para outra ação, continuam indo.
+ACOES_QUE_O_RESUMO_CONTA = {"abrir_programa", "fechar_programa", "volume_do_pc", "energia_do_pc",
+                            "controlar_lampada", "tocar_musica", "controlar_musica"}
+
+
+def dispensa_segunda_rodada(desta_rodada: list[dict]) -> bool:
+    """True quando todas as ações da rodada deram certo e nenhuma trouxe uma informação para o LLM contar."""
+    return bool(desta_rodada) and all(
+        a["ferramenta"] in ACOES_QUE_O_RESUMO_CONTA and isinstance(a["resultado"], dict) and a["resultado"].get("ok")
+        and not (a["ferramenta"] == "volume_do_pc" and a["argumentos"].get("acao") == "consultar")
+        for a in desta_rodada)
+
+
 def resumir(acoes: list[dict]) -> str:
     """Resposta de reserva quando o modelo não fecha com um texto: conta o que foi feito."""
     resultados = [(a["ferramenta"], a["resultado"]) for a in acoes if isinstance(a["resultado"], dict)]
@@ -721,7 +739,8 @@ def resumir(acoes: list[dict]) -> str:
     return "Fiz o que consegui, mas algo não saiu como esperado."
 
 
-def conversar(texto_usuario: str, conversa: str = CONVERSA_PADRAO) -> tuple[str, list[dict]]:
+def conversar(texto_usuario: str, conversa: str = CONVERSA_PADRAO, tempos: dict | None = None) -> tuple[str, list[dict]]:
+    tempos = {} if tempos is None else tempos  # quem chama recebe quanto tempo foi em cada etapa
     historico = lembrar(conversa)
     pendente = tirar_pendente(conversa)
     if pendente:  # a resposta à pergunta "quer mesmo desligar?" não passa pelo LLM
@@ -763,8 +782,10 @@ def conversar(texto_usuario: str, conversa: str = CONVERSA_PADRAO) -> tuple[str,
             payload.update(tools=ferramentas, tool_choice="none" if ultima else "auto")
 
         try:
-            r = requests.post(f"{LLM_URL}/chat/completions", headers=LLM_HEADERS,
-                              json=payload, timeout=60)
+            inicio_da_chamada = time.monotonic()
+            r = SESSAO.post(f"{LLM_URL}/chat/completions", headers=LLM_HEADERS, json=payload, timeout=60)
+            tempos["llm"] = tempos.get("llm", 0) + time.monotonic() - inicio_da_chamada
+            tempos["rodadas"] = rodada
             r.raise_for_status()
             msg = r.json()["choices"][0]["message"]
             if not isinstance(msg, dict):
@@ -789,6 +810,8 @@ def conversar(texto_usuario: str, conversa: str = CONVERSA_PADRAO) -> tuple[str,
 
         mensagens.append({"role": "assistant", "content": msg.get("content") or "",
                           "tool_calls": chamadas})
+        antes_da_rodada = len(acoes)
+        inicio_das_ferramentas = time.monotonic()
         for chamada in chamadas:
             nome = chamada["function"]["name"]
             args = ler_argumentos(chamada["function"].get("arguments"))
@@ -801,8 +824,11 @@ def conversar(texto_usuario: str, conversa: str = CONVERSA_PADRAO) -> tuple[str,
                     ferramentas = montar_ferramentas(pc)
             mensagens.append({"role": "tool", "tool_call_id": chamada["id"],
                               "content": json.dumps(executadas[chave], ensure_ascii=False)})
+        tempos["ferramentas"] = tempos.get("ferramentas", 0) + time.monotonic() - inicio_das_ferramentas
         if any(isinstance(a["resultado"], dict) and a["resultado"].get("confirmar") for a in acoes):
             guardar_pendente("desligar", conversa)  # o prazo conta a partir de agora, quando a pergunta sai
+            return terminar(resumir(acoes))
+        if dispensa_segunda_rodada(acoes[antes_da_rodada:]):
             return terminar(resumir(acoes))
 
 
@@ -855,15 +881,34 @@ def gerar_audio(texto: str) -> str | None:
     return base64.b64encode(wav).decode("ascii") if wav else None
 
 
-def responder(frase: str, conversa: str):
+def mostrar_tempos(tempos: dict) -> None:
+    """Uma linha por pedido no terminal, para enxergar onde vai o tempo."""
+    partes = [f"transcrição {tempos['transcricao']:.1f} s"] if "transcricao" in tempos else []
+    if "llm" in tempos:
+        rodadas = tempos.get("rodadas", 1)
+        partes.append(f"LLM {tempos['llm']:.1f} s em {rodadas} {'rodada' if rodadas == 1 else 'rodadas'}")
+    if tempos.get("ferramentas"):
+        partes.append(f"ferramentas {tempos['ferramentas']:.1f} s")
+    if "voz" in tempos:
+        partes.append(f"voz {tempos['voz']:.1f} s")
+    partes.append(f"total {time.monotonic() - tempos['inicio']:.1f} s")
+    print(f"[servidor] tempos: {' · '.join(partes)}".replace(".", ","), flush=True)
+
+
+def responder(frase: str, conversa: str, tempos: dict | None = None):
+    tempos = tempos if tempos is not None else {"inicio": time.monotonic()}
     try:
-        resposta, acoes = conversar(frase, conversa)
+        resposta, acoes = conversar(frase, conversa, tempos)
     except requests.RequestException as e:
         return jsonify(erro=explicar_erro(e, "a API do LLM")), 502
     dados = {"transcricao": frase, "resposta": resposta, "acoes": acoes}
-    audio = gerar_audio(resposta)
-    if audio:  # só com a voz do servidor: quem não sabe tocar o áudio segue usando o texto
-        dados["audio"] = audio
+    if VOZ is not None:
+        inicio_da_voz = time.monotonic()
+        audio = gerar_audio(resposta)
+        tempos["voz"] = time.monotonic() - inicio_da_voz
+        if audio:  # só com a voz do servidor: quem não sabe tocar o áudio segue usando o texto
+            dados["audio"] = audio
+    mostrar_tempos(tempos)
     return jsonify(dados)
 
 
@@ -896,6 +941,7 @@ def pagina():
 
 @app.post("/voz")
 def voz():
+    tempos = {"inicio": time.monotonic()}
     audio = request.get_data()
     if len(audio) < 1000:
         return jsonify(erro="Áudio curto demais. Segure o botão enquanto fala."), 400
@@ -903,9 +949,10 @@ def voz():
         texto = transcrever(audio, request.content_type)
     except requests.RequestException as e:
         return jsonify(erro=explicar_erro(e, "a API de transcrição")), 502
+    tempos["transcricao"] = time.monotonic() - tempos["inicio"]
     if not texto:
         return jsonify(erro="Não entendi nada no áudio. Tente de novo."), 400
-    return responder(texto, ler_conversa(request.headers.get("X-Conversa")))
+    return responder(texto, ler_conversa(request.headers.get("X-Conversa")), tempos)
 
 
 @app.post("/texto")

@@ -233,6 +233,7 @@ class TestVozNoServidor(unittest.TestCase):
         pilha = contextlib.ExitStack()
         self.addCleanup(pilha.close)
         self.terminal = pilha.enter_context(contextlib.redirect_stderr(io.StringIO()))
+        pilha.enter_context(contextlib.redirect_stdout(io.StringIO()))  # a linha de tempos de cada pedido
 
     def com_voz(self, piper):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
