@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 TUDO_CERTO, COM_PROBLEMAS, NAO_SOBE, QUEBROU, INTERROMPIDO = 0, 1, 2, 3, 130
-TOTAL = 9
+TOTAL = 10
 PASTA = Path(__file__).resolve().parent
 
 
@@ -315,6 +315,22 @@ def verificar_spotify(srv) -> bool | None:
     return True
 
 
+def verificar_voz(srv) -> bool | None:
+    passo(10, "Voz do servidor (opcional)")
+    if srv.VOZ is not None:
+        ok(f"a voz {srv.VOZ.nome} está gerando o áudio das respostas.")
+        return True
+    erro = srv.ERRO_DA_VOZ
+    if erro is None:
+        pulado('sem "voz" no config: a página fala com a voz do navegador.')
+        return None
+    if erro.codigo == "sem_piper":  # opcional, e no Termux nem dá para instalar
+        pulado(f"{erro}. Enquanto isso, a página fala com a voz do navegador (no Termux, fica sempre assim).")
+        return None
+    falhou(f"{erro}.", "enquanto isso, a página fala com a voz do navegador")
+    return False
+
+
 def main() -> int:
     print("Diagnóstico da assistente de voz")
     if not verificar_instalacao():
@@ -360,6 +376,8 @@ def main() -> int:
     if verificar_tempo(srv) is False:
         problemas += 1
     if verificar_spotify(srv) is False:
+        problemas += 1
+    if verificar_voz(srv) is False:
         problemas += 1
 
     if problemas:

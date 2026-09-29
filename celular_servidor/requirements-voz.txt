@@ -1,0 +1,4 @@
+# Opcional: a voz das respostas gerada no servidor (veja "Voz do servidor" no README).
+# Não instala no Termux (não há onnxruntime para Android); lá vale a voz do navegador.
+# Versão fixada: a 1.8.0 é bloqueada pelo Smart App Control do Windows, e para gerar voz as duas são iguais.
+piper-tts==1.7.0; sys_platform != "android"

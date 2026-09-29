@@ -19,6 +19,9 @@ snapshot.json
 spotify_token*.json*
 .spotify_token-*.tmp
 
+# Vozes do Piper baixadas (60 MB cada)
+vozes/
+
 # Python
 __pycache__/
 *.py[cod]

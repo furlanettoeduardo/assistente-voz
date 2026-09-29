@@ -5,6 +5,7 @@ Fluxo: áudio -> Whisper (Groq) -> LLM com ferramentas -> agente do PC -> respos
 
 Rodar:  python servidor.py   e abrir http://localhost:8000 no navegador do mesmo aparelho.
 """
+import base64
 import errno
 import importlib.util
 import ipaddress
@@ -33,6 +34,7 @@ except ImportError as e:  # o .venv não foi ativado ou o requirements não foi 
 import lampada
 import spotify
 import tempo
+import voz
 
 BASE = Path(__file__).parent
 ARQUIVO_CONFIG = BASE / "config_servidor.json"
@@ -201,6 +203,18 @@ _EXEMPLO_SPOTIFY = EXEMPLO.get("spotify") if isinstance(EXEMPLO.get("spotify"), 
 _CLIENT_ID = texto_opcional(_BLOCO_SPOTIFY or {}, "client_id", _EXEMPLO_SPOTIFY, ' do bloco "spotify"')
 SPOTIFY = spotify.Spotify(_CLIENT_ID, dispositivo=texto_opcional(
     _BLOCO_SPOTIFY or {}, "dispositivo", _EXEMPLO_SPOTIFY, ' do bloco "spotify"')) if _CLIENT_ID else None
+
+
+# Voz das respostas: com "voz" (uma voz do Piper baixada na pasta vozes), o servidor manda o áudio junto
+# com o texto. Sem o piper-tts ou sem o arquivo, vale a voz do navegador, e o terminal explica.
+_NOME_DA_VOZ = CFG.get("voz")
+if _NOME_DA_VOZ is not None and not isinstance(_NOME_DA_VOZ, str):
+    sys.exit(f'Em {ARQUIVO_CONFIG}, "voz" precisa ser {TIPOS[str]}, como em config_servidor.example.json.')
+_NOME_DA_VOZ = (_NOME_DA_VOZ or "").strip() or None
+if _NOME_DA_VOZ and not re.fullmatch(r"[A-Za-z0-9_.-]+", _NOME_DA_VOZ):
+    sys.exit(f'Em {ARQUIVO_CONFIG}, "voz" precisa ser o nome de uma voz do Piper, como "pt_BR-cadu-medium" '
+             f'(veio "{_NOME_DA_VOZ}").')
+VOZ, ERRO_DA_VOZ, AVISO_DA_VOZ = voz.preparar(_NOME_DA_VOZ)
 
 
 def aviso_do_spotify() -> str | None:
@@ -828,12 +842,29 @@ def explicar_erro(e: requests.RequestException, servico: str) -> str:
     return f"{servico_maiusculo} recusou o pedido (erro {status}). Veja os detalhes no terminal do servidor."
 
 
+def gerar_audio(texto: str) -> str | None:
+    """A resposta falada pela voz do servidor, em WAV codificado em base64; None sem voz ou se falhar."""
+    if VOZ is None:
+        return None
+    try:
+        wav = VOZ.sintetizar(texto)
+    except Exception as e:  # a voz é um extra: sem ela, a página fala com a voz do navegador
+        print(f"[servidor] a voz do servidor falhou; a página usa a do navegador (detalhe técnico: {e!r})",
+              file=sys.stderr)
+        return None
+    return base64.b64encode(wav).decode("ascii") if wav else None
+
+
 def responder(frase: str, conversa: str):
     try:
         resposta, acoes = conversar(frase, conversa)
     except requests.RequestException as e:
         return jsonify(erro=explicar_erro(e, "a API do LLM")), 502
-    return jsonify(transcricao=frase, resposta=resposta, acoes=acoes)
+    dados = {"transcricao": frase, "resposta": resposta, "acoes": acoes}
+    audio = gerar_audio(resposta)
+    if audio:  # só com a voz do servidor: quem não sabe tocar o áudio segue usando o texto
+        dados["audio"] = audio
+    return jsonify(dados)
 
 
 # ---------- Rotas ----------
@@ -925,6 +956,7 @@ if __name__ == "__main__":
     servidor = make_server(HOST, PORTA, app, threaded=True, fd=sock.fileno())
     print(f"[servidor] pronto: abra http://localhost:{sock.getsockname()[1]} no navegador deste aparelho.")
     print(aviso_da_lampada())
+    print(AVISO_DA_VOZ)
     if aviso_do_spotify():
         print(aviso_do_spotify())
     print("[servidor] para parar, aperte Ctrl+C.", flush=True)

@@ -16,6 +16,8 @@
 
   "cidade": "SUA-CIDADE, UF",
 
+  "voz": "pt_BR-cadu-medium",
+
   "lampada": {
     "id": "ID-DA-LAMPADA",
     "chave_local": "CHAVE-LOCAL-DA-LAMPADA",

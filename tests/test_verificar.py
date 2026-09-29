@@ -103,11 +103,11 @@ class TestVerificar(unittest.TestCase):
         self.assertEqual(codigo, 0, saida)
         self.assertEqual(saida.count("  OK: "), 6, saida)
         self.assertIn("Programas liberados: calculadora, navegador.", saida)
-        self.assertIn("[7/9] Lâmpada (opcional)", saida)
+        self.assertIn("[7/10] Lâmpada (opcional)", saida)
         self.assertIn("PULADO: nenhuma lâmpada configurada (é opcional).", saida)
         self.assertIn("Ações liberadas: bloquear, volume.", saida)
-        self.assertIn('[8/9] Previsão do tempo (opcional)\n  PULADO: sem "cidade" no config', saida)
-        self.assertIn("[9/9] Spotify (opcional)\n  PULADO: Spotify não configurado (é opcional).", saida)
+        self.assertIn('[8/10] Previsão do tempo (opcional)\n  PULADO: sem "cidade" no config', saida)
+        self.assertIn("[9/10] Spotify (opcional)\n  PULADO: Spotify não configurado (é opcional).", saida)
         self.assertIn("Tudo certo!", saida)
         # A chave do Groq foi testada só com a lista de modelos, sem áudio nem chat.
         caminhos = {p["caminho"] for p in self.llm.pedidos}
@@ -117,7 +117,7 @@ class TestVerificar(unittest.TestCase):
     def test_sem_config(self):
         codigo, saida = self.verificar(config=None)
         self.assertEqual(codigo, 2)
-        self.assertIn("[2/9] Arquivo de configuração", saida)
+        self.assertIn("[2/10] Arquivo de configuração", saida)
         self.assertIn("FALHOU: Arquivo de configuração não encontrado", saida)
         self.assertIn("Copie config_servidor.example.json", saida)
 
@@ -194,7 +194,7 @@ class TestVerificar(unittest.TestCase):
     def test_agente_fora_do_ar(self):
         codigo, saida = self.verificar(config={**self.config, "pc_url": "http://127.0.0.1:9"})
         self.assertEqual(codigo, 1)
-        self.assertIn("[5/9] Agente do PC em http://127.0.0.1:9", saida)
+        self.assertIn("[5/10] Agente do PC em http://127.0.0.1:9", saida)
         self.assertIn("FALHOU: não consegui conectar ao PC", saida)
         self.assertIn("iniciar_agente.bat", saida)
         self.assertIn("ipconfig", saida)

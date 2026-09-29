@@ -82,7 +82,20 @@ function mostrar(texto, erro = false) {
   status.classList.toggle("erro", erro);
 }
 
-function falar(texto) {
+// Com a voz do servidor, toca o áudio que veio junto da resposta; sem ela (ou se o navegador não
+// deixar tocar), usa a voz do próprio navegador.
+let somAtual = null;
+function falar(texto, audio) {
+  if (somAtual) { somAtual.pause(); somAtual = null; }
+  if (audio) {
+    somAtual = new Audio("data:audio/wav;base64," + audio);
+    somAtual.play().catch(() => falarNoNavegador(texto));
+    return;
+  }
+  falarNoNavegador(texto);
+}
+
+function falarNoNavegador(texto) {
   if (!("speechSynthesis" in window) || !texto) return;
   speechSynthesis.cancel();
   const fala = new SpeechSynthesisUtterance(texto);
@@ -152,7 +165,7 @@ async function enviar(url, opcoes) {
     const dados = await pedir(url, opcoes);
     registrar(dados);
     mostrar("Segure o botão e fale");
-    falar(dados.resposta);
+    falar(dados.resposta, dados.audio);
   } catch (e) {
     mostrar(e.message, true);
   } finally {
