@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 TUDO_CERTO, COM_PROBLEMAS, NAO_SOBE, QUEBROU, INTERROMPIDO = 0, 1, 2, 3, 130
-TOTAL = 7
+TOTAL = 9
 PASTA = Path(__file__).resolve().parent
 
 
@@ -237,8 +237,13 @@ def verificar_token(srv, resposta, agente_ok: bool) -> bool:
                "copie o token do config_agente.json do PC para pc_token: os dois precisam ser idênticos",
                "no console do agente aparece '[agente] pedido recusado ... token inválido' a cada tentativa")
         return False
-    programas = resposta.json()["programas"]
-    ok(f"token aceito. Programas liberados: {', '.join(programas)}.")
+    dados = resposta.json()
+    extras = []
+    if dados.get("fechaveis"):
+        extras.append(f"Fecha: {', '.join(dados['fechaveis'])}.")
+    if dados.get("acoes"):
+        extras.append(f"Ações liberadas: {', '.join(dados['acoes'])}.")
+    ok(" ".join([f"token aceito. Programas liberados: {', '.join(dados['programas'])}.", *extras]))
     return True
 
 
@@ -271,6 +276,42 @@ def verificar_lampada(srv) -> bool | None:
         falhou("a lâmpada respondeu, mas usa outros comandos, que o servidor ainda não sabe mandar.")
         return False
     ok(f"a lâmpada respondeu e está {'ligada' if dps.get('20') else 'desligada'}.")
+    return True
+
+
+def verificar_tempo(srv) -> bool | None:
+    """Com uma "cidade" padrão, confere se ela existe e se a previsão responde."""
+    passo(8, "Previsão do tempo (opcional)")
+    if not srv.CIDADE:
+        pulado('sem "cidade" no config: a previsão funciona se a pessoa disser a cidade.')
+        return None
+    try:
+        dados = srv.TEMPO.previsao(srv.CIDADE, 0)
+    except srv.tempo.ErroNoTempo as e:
+        falhou(f"{e}.", 'confira "cidade" no config; use o formato "Cidade, UF", como "Curitiba, PR"',
+               "a previsão usa a internet (Open-Meteo): confira a conexão")
+        return False
+    ok(f"previsão respondendo para {dados['cidade']}.")
+    return True
+
+
+def verificar_spotify(srv) -> bool | None:
+    passo(9, "Spotify (opcional)")
+    if srv.SPOTIFY is None:
+        pulado("Spotify não configurado (é opcional).")
+        return None
+    if not srv.SPOTIFY.conectado():
+        falhou("o Spotify ainda não foi conectado.",
+               f"na pasta {caminho(srv.BASE)}, rode: python spotify_conectar.py",
+               "o login abre no navegador; ele precisa ser feito no aparelho que tem navegador")
+        return False
+    try:
+        srv.SPOTIFY.testar()
+    except srv.spotify.ErroNoSpotify as e:
+        falhou(f"{e}.", "a conta dona do app precisa ser Premium; o app é o criado em "
+                        "developer.spotify.com/dashboard, com o client_id do config")
+        return False
+    ok("Spotify conectado e respondendo.")
     return True
 
 
@@ -315,6 +356,10 @@ def main() -> int:
     if not verificar_token(srv, resposta, agente_ok):
         problemas += 1
     if verificar_lampada(srv) is False:
+        problemas += 1
+    if verificar_tempo(srv) is False:
+        problemas += 1
+    if verificar_spotify(srv) is False:
         problemas += 1
 
     if problemas:

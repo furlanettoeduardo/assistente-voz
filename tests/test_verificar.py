@@ -65,10 +65,11 @@ class TestVerificar(unittest.TestCase):
                        "llm_api_key": CHAVE, "llm_model": "qwen-falso", "pc_url": self.servidor_agente.url,
                        "pc_token": TOKEN, "porta": 8000}
 
-    def verificar(self, config="padrao", lampada=None, **substituir) -> tuple[int, str]:
+    def verificar(self, config="padrao", lampada=None, ajustar=None, **substituir) -> tuple[int, str]:
         """
         Roda o main() do verificar.py numa cópia da pasta, com o Groq apontando para o falso.
-        `lampada(srv)` devolve o objeto de teste que substitui a LAMPADA do servidor carregado.
+        `lampada(srv)` devolve o objeto de teste que substitui a LAMPADA do servidor carregado, e
+        `ajustar(srv)` pode trocar outras peças dele (TEMPO, SPOTIFY...).
         """
         pasta = copiar_componente(PASTA_SERVIDOR, Path(self.tmp.name) / f"servidor{next(_pastas)}")
         if config is not None:
@@ -86,6 +87,8 @@ class TestVerificar(unittest.TestCase):
                 srv.GROQ_URL = self.llm.url
                 if lampada is not None:
                     srv.LAMPADA = lampada(srv)
+                if ajustar is not None:
+                    ajustar(srv)
             except (SystemExit, ImportError):
                 pass  # config inválido ou Flask ausente: o próprio verificar vai explicar
             with contextlib.ExitStack() as pilha:
@@ -100,8 +103,11 @@ class TestVerificar(unittest.TestCase):
         self.assertEqual(codigo, 0, saida)
         self.assertEqual(saida.count("  OK: "), 6, saida)
         self.assertIn("Programas liberados: calculadora, navegador.", saida)
-        self.assertIn("[7/7] Lâmpada (opcional)", saida)
+        self.assertIn("[7/9] Lâmpada (opcional)", saida)
         self.assertIn("PULADO: nenhuma lâmpada configurada (é opcional).", saida)
+        self.assertIn("Ações liberadas: bloquear, volume.", saida)
+        self.assertIn('[8/9] Previsão do tempo (opcional)\n  PULADO: sem "cidade" no config', saida)
+        self.assertIn("[9/9] Spotify (opcional)\n  PULADO: Spotify não configurado (é opcional).", saida)
         self.assertIn("Tudo certo!", saida)
         # A chave do Groq foi testada só com a lista de modelos, sem áudio nem chat.
         caminhos = {p["caminho"] for p in self.llm.pedidos}
@@ -111,7 +117,7 @@ class TestVerificar(unittest.TestCase):
     def test_sem_config(self):
         codigo, saida = self.verificar(config=None)
         self.assertEqual(codigo, 2)
-        self.assertIn("[2/7] Arquivo de configuração", saida)
+        self.assertIn("[2/9] Arquivo de configuração", saida)
         self.assertIn("FALHOU: Arquivo de configuração não encontrado", saida)
         self.assertIn("Copie config_servidor.example.json", saida)
 
@@ -188,7 +194,7 @@ class TestVerificar(unittest.TestCase):
     def test_agente_fora_do_ar(self):
         codigo, saida = self.verificar(config={**self.config, "pc_url": "http://127.0.0.1:9"})
         self.assertEqual(codigo, 1)
-        self.assertIn("[5/7] Agente do PC em http://127.0.0.1:9", saida)
+        self.assertIn("[5/9] Agente do PC em http://127.0.0.1:9", saida)
         self.assertIn("FALHOU: não consegui conectar ao PC", saida)
         self.assertIn("iniciar_agente.bat", saida)
         self.assertIn("ipconfig", saida)
@@ -260,6 +266,62 @@ class TestVerificar(unittest.TestCase):
         codigo, saida = self.verificar(lampada=lambda srv: LampadaDeTeste({"1": True, "2": 255}))
         self.assertEqual(codigo, 1)
         self.assertIn("usa outros comandos", saida)
+
+    def test_previsao_do_tempo_com_cidade(self):
+        class Tempo:
+            def __init__(self, erro=None):
+                self.erro = erro
+
+            def previsao(self, cidade, dias):
+                if self.erro:
+                    raise self.erro
+                return {"cidade": f"{cidade.split(',')[0]}, Paraná"}
+
+        def certo(srv):
+            srv.TEMPO = Tempo()
+
+        codigo, saida = self.verificar(config={**self.config, "cidade": "Curitiba, PR"}, ajustar=certo)
+        self.assertEqual(codigo, 0, saida)
+        self.assertIn("OK: previsão respondendo para Curitiba, Paraná.", saida)
+
+        def errado(srv):
+            srv.TEMPO = Tempo(srv.tempo.ErroNoTempo("não encontrei a cidade Curitibx, PR"))
+
+        codigo, saida = self.verificar(config={**self.config, "cidade": "Curitibx, PR"}, ajustar=errado)
+        self.assertEqual(codigo, 1)
+        self.assertIn("FALHOU: não encontrei a cidade Curitibx, PR.", saida)
+        self.assertIn('use o formato "Cidade, UF"', saida)
+
+    def test_spotify(self):
+        class Spotify:
+            def __init__(self, conectado=True, erro=None):
+                self._conectado, self.erro = conectado, erro
+
+            def conectado(self):
+                return self._conectado
+
+            def testar(self):
+                if self.erro:
+                    raise self.erro
+                return ["NOTEBOOK"]
+
+        config = {**self.config, "spotify": {"client_id": "abc123"}}
+        codigo, saida = self.verificar(config=config)  # nos testes, o spotify_token.json nunca existe
+        self.assertEqual(codigo, 1)
+        self.assertIn("FALHOU: o Spotify ainda não foi conectado.", saida)
+        self.assertIn("rode: python spotify_conectar.py", saida)
+
+        codigo, saida = self.verificar(config=config, ajustar=lambda srv: setattr(srv, "SPOTIFY", Spotify()))
+        self.assertEqual(codigo, 0, saida)
+        self.assertIn("OK: Spotify conectado e respondendo.", saida)
+
+        def premium(srv):
+            srv.SPOTIFY = Spotify(erro=srv.spotify.ErroNoSpotify("o Spotify recusou: a conta precisa ser Premium",
+                                                                 "premium"))
+
+        codigo, saida = self.verificar(config=config, ajustar=premium)
+        self.assertEqual(codigo, 1)
+        self.assertIn("FALHOU: o Spotify recusou: a conta precisa ser Premium.", saida)
 
     def test_erro_inesperado_tem_codigo_proprio(self):
         def quebrar(*args):
