@@ -15,6 +15,10 @@ devices.json
 tuya-raw.json
 snapshot.json
 
+# Token do Spotify que o spotify_conectar.py grava: dá acesso à sua conta.
+spotify_token*.json*
+.spotify_token-*.tmp
+
 # Python
 __pycache__/
 *.py[cod]
