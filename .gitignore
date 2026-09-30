@@ -22,6 +22,10 @@ spotify_token*.json*
 # Vozes do Piper baixadas (60 MB cada)
 vozes/
 
+# Modelos do "hey Jarvis" que o baixar_ativacao.py baixa (licença não comercial: não vão para o repositório)
+celular_servidor/static/ativacao/modelos/*.onnx
+celular_servidor/static/ativacao/modelos/*.parcial
+
 # Python
 __pycache__/
 *.py[cod]
