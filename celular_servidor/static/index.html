@@ -36,6 +36,21 @@
   #falar.ouvindo { box-shadow: 0 0 0 28px var(--brilho), 0 0 70px 30px var(--brilho); transform: scale(1.04); }
   #falar.pensando { opacity: .6; }
   #falar:focus-visible { outline: 3px solid var(--texto); outline-offset: 6px; }
+  .ativacao {
+    display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 auto 4px;
+    color: var(--suave); cursor: pointer; user-select: none; -webkit-user-select: none;
+  }
+  .ativacao input {
+    appearance: none; -webkit-appearance: none; flex: none; position: relative; margin: 0; cursor: pointer;
+    width: 2.75rem; height: 1.6rem; border-radius: 999px; background: var(--linha); transition: background .2s;
+  }
+  .ativacao input::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: calc(1.6rem - 6px); height: calc(1.6rem - 6px);
+    border-radius: 50%; background: var(--fundo); transition: transform .2s;
+  }
+  .ativacao input:checked { background: var(--lampada); }
+  .ativacao input:checked::after { transform: translateX(1.15rem); }
+  .ativacao input:focus-visible { outline: 3px solid var(--texto); outline-offset: 3px; }
   form { display: flex; gap: 8px; margin: 12px 0 20px; }
   input {
     flex: 1; min-width: 0; font: inherit; color: inherit; background: transparent;
@@ -51,13 +66,14 @@
   .ela { margin: 2px 0 0; }
   .acao { font-size: .85rem; color: var(--suave); margin: 4px 0 0; }
   .acao a { color: inherit; }
-  @media (prefers-reduced-motion: reduce) { #falar { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { #falar, .ativacao input, .ativacao input::after { transition: none; } }
 </style>
 </head>
 <body>
 <main>
   <p id="status">Segure o botão e fale</p>
   <div class="palco"><button id="falar" type="button">Segure para falar</button></div>
+  <label class="ativacao"><input id="ouvir" type="checkbox" role="switch" autocomplete="off"> Ouvir “hey Jarvis”</label>
   <form id="formTexto">
     <input id="campo" placeholder="Ou digite um comando" autocomplete="off">
     <button type="submit">Enviar</button>
@@ -65,6 +81,7 @@
   <ol id="historico"></ol>
 </main>
 
+<script src="/static/ativacao/jarvis.js"></script>
 <script>
 // Cada aba é uma conversa: o servidor lembra dos últimos pedidos dela ("agora fecha ele").
 const CONVERSA = (self.crypto && crypto.randomUUID) ? crypto.randomUUID()
@@ -281,10 +298,11 @@ async function lerEventos(corpo, aoEvento) {
 let pedidoAtual = null;
 
 // Os eventos do streaming, na ordem em que o servidor manda: transcricao, resposta, um audio por
-// frase e fim (ou erro no lugar de resposta e fim).
+// frase e fim (ou erro no lugar de resposta e fim). Um pedido calado (a pessoa começou a falar de novo)
+// não mexe mais no status, para não apagar o "Ouvindo…".
 async function tratarEvento(pedido, evento) {
   if (pedido.terminou) return;
-  const atual = pedido === pedidoAtual;
+  const atual = pedido === pedidoAtual && !pedido.calado;
   switch (evento.tipo) {
     case "transcricao":
       pedido.item = pedido.item || novoItem(evento.texto);
@@ -310,8 +328,8 @@ async function tratarEvento(pedido, evento) {
     case "fim":
       pedido.terminou = true;
       if (!atual) break;
-      if (!pedido.audios && !pedido.calado) falarNoNavegador(pedido.texto);
-      if (!pedido.reserva) mostrar("Segure o botão e fale"); // o aviso da troca de voz fica na tela
+      if (!pedido.audios) falarNoNavegador(pedido.texto);
+      if (!pedido.reserva) mostrar(pronto()); // o aviso da troca de voz fica na tela
       break;
   }
 }
@@ -329,8 +347,8 @@ async function enviar(url, opcoes) {
     const dados = await pedir(url, { ...opcoes, headers: cabecalhos }, evento => tratarEvento(pedido, evento));
     if (dados) { // um JSON só: servidor antigo
       registrar(dados);
-      if (pedido === pedidoAtual) {
-        mostrar("Segure o botão e fale");
+      if (pedido === pedidoAtual && !pedido.calado) {
+        mostrar(pronto());
         falar(dados.resposta, dados.audio);
       }
     } else if (!pedido.terminou) {
@@ -338,7 +356,7 @@ async function enviar(url, opcoes) {
     }
   } catch (e) {
     // Depois do fim (ou do erro), a resposta já está completa: uma queda da conexão aí não apaga o status.
-    if (pedido === pedidoAtual && !pedido.terminou) mostrar(e.message, true);
+    if (pedido === pedidoAtual && !pedido.calado && !pedido.terminou) mostrar(e.message, true);
   } finally {
     if (pedido === pedidoAtual) botao.classList.remove("pensando");
   }
@@ -404,6 +422,130 @@ document.getElementById("formTexto").addEventListener("submit", e => {
   enviar("/texto", { method: "POST", headers: { "Content-Type": "application/json" },
                      body: JSON.stringify({ texto, conversa: CONVERSA }) });
 });
+
+// ---------- "hey Jarvis": a palavra de ativação, reconhecida aqui mesmo (static/ativacao/jarvis.js) ----------
+// Simula o satélite ESP32: ouve o tempo todo, e só depois da palavra grava o comando e manda para o /voz
+// um WAV 16 kHz mono, pelo mesmo caminho do botão (que continua funcionando igual).
+const ouvir = document.getElementById("ouvir");
+const ESCOLHA = "ouvirJarvis";
+const DIGA = "Diga “hey Jarvis”…";
+let escuta = null;
+
+function pronto() {
+  return escuta ? DIGA : "Segure o botão e fale";
+}
+
+// O status só volta para o de espera se nenhum pedido ou gravação estiver usando ele.
+function livre() {
+  return !botao.classList.contains("pensando") && !botao.classList.contains("ouvindo");
+}
+
+function guardarEscolha(ligada) {
+  try { localStorage.setItem(ESCOLHA, ligada ? "1" : "0"); } catch {} // navegação privada, armazenamento bloqueado
+}
+
+// Um bipe curto e baixo: "estou ouvindo o comando".
+function bipe() {
+  if (!contexto || contexto.state !== "running") return;
+  try {
+    const t = contexto.currentTime;
+    const oscilador = contexto.createOscillator();
+    const volume = contexto.createGain();
+    oscilador.frequency.value = 880;
+    volume.gain.setValueAtTime(0, t);
+    volume.gain.linearRampToValueAtTime(0.08, t + 0.01);
+    volume.gain.linearRampToValueAtTime(0, t + 0.12);
+    oscilador.connect(volume);
+    volume.connect(contexto.destination);
+    oscilador.start(t);
+    oscilador.stop(t + 0.13);
+  } catch {} // sem o bipe, o brilho do botão e o status ainda avisam
+}
+
+async function ligarEscuta() {
+  if (escuta) return;
+  if (!window.Jarvis) return falhaDaEscuta("Não consegui carregar a escuta do “hey Jarvis”. Recarregue a página.");
+  prepararSom(); // no clique do controle, o navegador libera o som (e com ele a captura pela Web Audio)
+  const esta = escuta = new Jarvis.Escuta({
+    contexto: () => { prepararSom(); return contexto; },
+    ocupada: () => segurando || !!gravador, // o botão de falar tem a vez
+    aoDetectar() {
+      calar(); // a assistente para de falar, e o pedido anterior fica calado
+      if (pedidoAtual) pedidoAtual.calado = true;
+      bipe();
+      botao.classList.add("ouvindo");
+      mostrar("Ouvindo…");
+    },
+    aoComando(wav) {
+      botao.classList.remove("ouvindo");
+      enviar("/voz", { method: "POST", headers: { "Content-Type": "audio/wav", "X-Conversa": CONVERSA },
+                       body: new Blob([wav], { type: "audio/wav" }) });
+    },
+    aoSemFala() {
+      botao.classList.remove("ouvindo");
+      mostrar("Não ouvi nada. Diga “hey Jarvis” de novo.");
+    },
+    aoErro: falhaDaEscuta,
+  });
+  ouvir.checked = true;
+  guardarEscolha(true);
+  if (livre()) mostrar("Preparando o “hey Jarvis”…");
+  try {
+    await esta.ligar();
+  } catch (e) {
+    if (escuta === esta) falhaDaEscuta(e.message);
+    return;
+  }
+  if (escuta !== esta) return; // desligaram enquanto carregava
+  if (contexto.state !== "running") { // sem um gesto, o resume() pode ficar esperando para sempre
+    let espera;
+    await Promise.race([contexto.resume().catch(() => {}), new Promise(ok => { espera = setTimeout(ok, 300); })]);
+    clearTimeout(espera);
+  }
+  vigiarSom();
+  if (escuta !== esta || !livre()) return;
+  mostrar(contexto.state === "running" ? DIGA
+    : "Toque na página para ligar a escuta: o navegador só libera o som depois de um toque.");
+}
+
+// Se o navegador pausar o som no meio (troca de fone, outra aba tocando, ligação no celular), o microfone
+// deixa de chegar à escuta: o status avisa, e um toque na página (liberarComGesto) retoma.
+function vigiarSom() {
+  contexto.onstatechange = () => {
+    if (!escuta || escuta.estado === "carregando" || !livre()) return;
+    if (contexto.state === "running") mostrar(DIGA);
+    else mostrar("O navegador pausou o som, e a escuta do “hey Jarvis” parou: toque na página para voltar.");
+  };
+}
+
+function desligarEscuta() {
+  if (escuta) escuta.desligar(); // solta o microfone e para tudo
+  escuta = null;
+  ouvir.checked = false;
+  guardarEscolha(false);
+  if (!segurando) botao.classList.remove("ouvindo");
+  if (livre()) mostrar(pronto());
+}
+
+function falhaDaEscuta(mensagem) {
+  desligarEscuta();
+  mostrar(mensagem, true);
+}
+
+// Ao recarregar com a escuta ligada, ela volta; se o navegador pedir um gesto, o primeiro toque libera o som.
+function liberarComGesto() {
+  if (!escuta || !contexto || contexto.state === "running") return;
+  contexto.resume().then(() => { if (escuta && escuta.estado !== "carregando" && livre()) mostrar(DIGA); }, () => {});
+}
+document.addEventListener("pointerdown", liberarComGesto, true); // com o mouse, o pointerdown já é um gesto
+document.addEventListener("pointerup", liberarComGesto, true);   // no toque, só o pointerup vale
+document.addEventListener("keydown", liberarComGesto, true);
+
+ouvir.addEventListener("change", () => { if (ouvir.checked) ligarEscuta(); else desligarEscuta(); });
+ouvir.checked = false; // o Firefox restaura a caixa ao recarregar: quem decide é a escolha guardada
+let escolha = null;
+try { escolha = localStorage.getItem(ESCOLHA); } catch {}
+if (escolha === "1") ligarEscuta();
 
 if ("speechSynthesis" in window) speechSynthesis.getVoices(); // pré-carrega as vozes
 </script>

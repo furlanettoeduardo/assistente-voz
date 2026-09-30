@@ -118,8 +118,10 @@ class Elemento {
   }
 }
 const elementos = Object.fromEntries(
-  ["status", "falar", "formTexto", "campo", "historico"].map(id => [id, new Elemento(id)]));
-globalThis.document = { getElementById: id => elementos[id], createElement: () => new Elemento() };
+  ["status", "falar", "ouvir", "formTexto", "campo", "historico"].map(id => [id, new Elemento(id)]));
+const documento = new Elemento("document");  // os ouvintes de gesto da página inteira
+globalThis.document = { getElementById: id => elementos[id], createElement: () => new Elemento(),
+                        addEventListener: (tipo, f) => documento.addEventListener(tipo, f) };
 
 function estado() {
   return {
@@ -224,12 +226,19 @@ async function digitar(texto) {
 """
 
 
-def rodar_pagina(codigo: str):
-    """Roda o <script> inteiro do index.html no navegador falso, seguido de `codigo`, e devolve o JSON impresso."""
+def rodar_pagina(codigo: str, antes: str = ""):
+    """
+    Roda o <script> inteiro do index.html no navegador falso, seguido de `codigo`, e devolve o JSON impresso.
+    Antes dele vêm os scripts do próprio servidor (<script src="/static/...">), na ordem, como o navegador
+    carregaria, e `antes`, que completa o navegador falso.
+    """
     html = INDEX.read_text(encoding="utf-8")
     script = re.search(r"<script>(.*?)</script>", html, flags=re.DOTALL)
     assert script, "não achei o <script> no index.html"
-    return _rodar_js("pagina", PAGINA_FALSA_JS + script.group(1) + "\n// ---------- o teste ----------\n" + codigo)
+    externos = "".join((PASTA_SERVIDOR / src.removeprefix("/")).read_text(encoding="utf-8") + "\n"
+                       for src in re.findall(r'<script src="(/static/[^"]+)"></script>', html))
+    return _rodar_js("pagina", PAGINA_FALSA_JS + antes + externos + script.group(1)
+                     + "\n// ---------- o teste ----------\n" + codigo)
 
 
 def js(codigo: str) -> str:
