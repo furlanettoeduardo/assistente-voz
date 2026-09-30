@@ -2,7 +2,7 @@
 
 Você segura o botão de falar numa página e pede: "abre a calculadora", "fecha o chrome", "volume em 30", "acende a luz", "vai chover amanhã?" ou "toca Legião Urbana". Por enquanto, tudo roda no mesmo notebook. A lista completa está em [O que dá para pedir](#o-que-dá-para-pedir).
 
-**Onde o projeto está:** as fases v0.1 (abrir programas e lâmpada) e v0.2 (fechar programas, volume, bloquear e desligar o PC, hora, previsão do tempo e Spotify) estão prontas e testadas por voz no notebook. A v0.3 também está pronta: memória curta da conversa, voz gerada no servidor com o Piper e respostas mais rápidas, em streaming. O plano completo está no [roadmap.md](roadmap.md).
+**Onde o projeto está:** as fases v0.1 (abrir programas e lâmpada) e v0.2 (fechar programas, volume, bloquear e desligar o PC, hora, previsão do tempo e Spotify) estão prontas e testadas por voz no notebook. A v0.3 também está pronta: memória curta da conversa, voz gerada no servidor com o Piper e respostas mais rápidas, em streaming. Para simular os satélites da visão final, a página também pode ficar ouvindo e ativar com "hey Jarvis", como explica [Palavra de ativação](#palavra-de-ativação-hey-jarvis-opcional). O plano completo está no [roadmap.md](roadmap.md).
 
 O projeto tem duas partes:
 
@@ -328,6 +328,33 @@ O segundo comando baixa a voz (cerca de 60 MB) para a pasta `celular_servidor\vo
 - A página recebe a resposta em partes: o que você disse aparece na hora, a resposta aparece quando o LLM termina, e a voz vem frase a frase, com a primeira frase tocando enquanto as outras ainda estão sendo geradas. Apertar o botão de falar cala a assistente, para o microfone não captar a voz dela.
 - Antes de falar, o servidor ajusta o texto do jeito que o Piper lê melhor: "10h33" vira "10 horas e 33", "22°C" vira "22 graus", "R$ 12,50" vira "12 reais e 50 centavos", e emojis e markdown saem.
 
+## Palavra de ativação "hey Jarvis" (opcional)
+
+Simula o que o satélite ESP32 vai fazer: com a escuta ligada, a página ouve o microfone o tempo todo e, quando você diz "hey Jarvis", dá um bipe, grava o comando até você parar de falar e o manda ao servidor, como o botão faz. O botão de segurar para falar continua funcionando igual.
+
+O reconhecimento do "hey Jarvis" é feito pelo [openWakeWord](https://github.com/dscripka/openWakeWord), dentro do próprio navegador: enquanto você não diz a palavra, nenhum áudio sai do PC. Depois dela, o caminho é o de sempre (transcrição e LLM no Groq, ferramentas e a voz do Piper). Não precisa de conta nem de chave.
+
+### Como ligar
+
+1. Baixe os modelos do "hey Jarvis" (3,5 MB, uma vez só), na pasta `celular_servidor`:
+   ```
+   python baixar_ativacao.py
+   ```
+   Eles vão para `celular_servidor/static/ativacao/modelos`, que fica fora do Git, e o script confere cada arquivo pelo SHA-256.
+2. Recarregue a página (Ctrl+F5), ligue **Ouvir "hey Jarvis"**, logo abaixo do botão, e permita o microfone. O status muda para "Diga "hey Jarvis"…".
+3. Diga "hey Jarvis", espere o bipe e fale o comando ("abre a calculadora"). Depois de uns 0,8 s de silêncio, o comando vai para o servidor; a gravação vai no máximo até 8 s, e desiste depois de 4 s sem fala ("Não ouvi nada.").
+
+- A escolha fica guardada: ao recarregar a página, a escuta volta sozinha. Se o navegador pedir um gesto para liberar o som, um toque em qualquer lugar da página resolve.
+- Um "hey Jarvis" enquanto a assistente fala cala a resposta e começa um comando novo. Depois de cada detecção, o detector espera uns 2 s antes de ouvir a palavra de novo.
+- A gravação começa no bipe: fale o comando depois dele.
+- Só funciona em `localhost`, como o botão. Testado no Chrome e no Edge; o Firefox e o Safari não foram testados. A escuta usa uns 10% de um núcleo do processador.
+- A biblioteca que roda os modelos no navegador (o onnxruntime-web) vem de `cdn.jsdelivr.net` ao ligar a escuta, então precisa de internet, como o Groq.
+- O comando vai ao servidor como WAV 16 kHz mono, o formato que o ESP32 vai usar.
+
+**Frases parecidas também ativam:** "hey Travis", "hey Jervis" e até "Ei, Gervásio" ou "Rei Jarvis" passam do limiar. É o próprio modelo (o openWakeWord em Python faz igual), que foi treinado com vozes sintéticas em inglês. Nos testes, 2 minutos de conversa em português e outros 2 minutos de ruídos variados não dispararam nenhuma vez. Uma palavra própria em português exigiria treinar um modelo.
+
+**Licenças:** o código do openWakeWord é Apache-2.0, e os modelos prontos são [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.pt-br), só para uso não comercial, com o crédito ao openWakeWord (David Scripka); por isso os `.onnx` não vão para o repositório. O onnxruntime-web é MIT.
+
 ## Velocidade das respostas
 
 Num pedido simples ("que horas são?"), o servidor leva perto de 1 s até a voz ficar pronta; num comando ("abre a calculadora"), um pouco mais, com o tempo do agente. Para chegar nisso:
@@ -486,6 +513,7 @@ Os testes não chamam nenhuma API real. O LLM, a transcrição e a lista de mode
 - a lâmpada: conferência do bloco `lampada`, tradução dos pedidos para os comandos da Tuya e dos erros para o português, e o `tinytuya` de verdade falando com uma lâmpada falsa em `127.0.0.1` nos protocolos 3.3, 3.4 e 3.5, inclusive com chave ou versão erradas e com a lâmpada desligada;
 - fechar programas, volume, bloquear e desligar o PC: os comandos exatos do Windows e do Linux (taskkill, tasklist, pkill, wpctl, pactl, shutdown), com as funções que mexem no PC trocadas por mocks. Nenhum teste muda o volume, bloqueia a tela ou desliga nada; no Windows, só uma leitura do volume real;
 - a confirmação por voz antes de desligar: o que conta como "sim" e como "não", a pergunta que vence e que vale uma vez só;
+- a palavra de ativação: a reamostragem do microfone para 16 kHz, o WAV, o detector de fim de fala, o pipeline do openWakeWord (com modelos falsos: quantas vezes cada modelo roda, as janelas e os passos, o limiar e a pausa depois da detecção), a página ligando, detectando, gravando e mandando o WAV, e o `baixar_ativacao.py` com um servidor falso. A suíte não usa os modelos de verdade nem a internet;
 - as respostas em streaming: a ordem dos eventos, um WAV por frase, os erros no meio da resposta, o JSON de sempre para quem não pede o streaming e o servidor HTTP de verdade mandando cada linha na hora; na página, a leitura com linhas e acentos cortados entre pedaços, as frases agendadas sem pausa e a volta para a voz do navegador. Os testes da página precisam do Node 18 ou mais novo;
 - a memória curta (o LLM vê os últimos pedidos da mesma conversa, e só dela) e a voz do servidor, com um Piper falso: o texto ajustado para a fala, o áudio na resposta e o servidor seguindo sem voz quando o Piper falha. Com o piper-tts e a voz instalados, um teste gera um áudio de verdade (sem tocar);
 - o Wake-on-LAN, a previsão do tempo (com um Open-Meteo falso) e o Spotify (com uma API falsa: renovação do token, busca, escolha do computador, erros de Premium e de cota, e o `spotify_conectar.py` de ponta a ponta);
@@ -586,6 +614,17 @@ Comece pelo diagnóstico: `python verificar.py` na pasta `celular_servidor`. O t
 - **A página fala com a voz do navegador mesmo com a voz do servidor ligada**: recarregue a página com Ctrl+F5 (uma aba aberta antes de atualizar o servidor continua com o código antigo). Se aparecer "Não consegui tocar a voz do servidor (...)", o motivo está entre parênteses: "NotAllowedError" é o navegador que não liberou o som (toque no botão de falar ou use o campo de texto antes), "EncodingError" é uma frase que não decodificou e "NotSupportedError" é um navegador sem Web Audio.
 - **"A conexão com o servidor caiu no meio da resposta"**: o servidor parou ou foi reiniciado enquanto respondia. Suba o servidor de novo e repita o pedido.
 - **"a voz do servidor falhou depois de N frases"** (no terminal): o resto daquela resposta ficou sem voz. É raro; o pedido seguinte volta ao normal.
+
+### Palavra de ativação
+
+- **"Os modelos do "hey Jarvis" não estão no servidor"** ou **"...estão com defeito"**: na pasta `celular_servidor`, rode `python baixar_ativacao.py`. O script confere cada arquivo e baixa de novo o que estiver errado.
+- **"Não consegui carregar o onnxruntime-web..."**: a página não alcançou `cdn.jsdelivr.net`. Confira a internet e ligue a escuta de novo.
+- **"Nenhum microfone encontrado"**, **"O microfone não respondeu (pode estar em uso por outro programa)"** ou **"O microfone parou de mandar áudio"**: ligue o microfone, feche o programa que o usa (uma chamada de vídeo, por exemplo) e ligue a escuta de novo.
+- **"O navegador pausou o som, e a escuta do "hey Jarvis" parou"**: toque em qualquer lugar da página.
+- **"Não ouvi nada. Diga "hey Jarvis" de novo."**: o bipe tocou, mas nenhuma fala veio em 4 s. Fale logo depois do bipe.
+- **O comando fica gravando até o fim (8 s)**: com TV ou conversa ao fundo, o detector não acha o silêncio que marca o fim da fala. Baixe o som ambiente ou use o botão.
+- **"A escuta do "hey Jarvis" parou por um erro"**: o detalhe técnico vem entre parênteses, e o erro inteiro aparece no console do navegador (F12). Ligue a escuta de novo.
+- **A palavra não é reconhecida**: diga "hey Jarvis" em voz normal, como em inglês ("rêi djárvis"), a um ou dois metros do microfone.
 
 ### Página, Termux e instalação
 

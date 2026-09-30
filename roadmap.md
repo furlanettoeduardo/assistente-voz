@@ -44,7 +44,7 @@ Os aparelhos se comunicam pela rede Wi-Fi de casa, através do roteador. Saem pa
 ### Descartados
 
 - **STM32:** a maioria dos modelos não tem Wi-Fi; seria trabalho demais para pouco ganho.
-- **Palavra de ativação no navegador:** fazia sentido só com o celular como aparelho dedicado, e o celular era provisório.
+- **Palavra de ativação no navegador como entrada definitiva:** fazia sentido só com o celular como aparelho dedicado, e o celular era provisório. Ela voltou só como simulação do satélite (veja a v0.3), para testar o fluxo antes do ESP32.
 
 ### Contrato entre satélite e cérebro: `/voz`
 
@@ -58,7 +58,7 @@ Mudanças previstas no contrato:
 
 - quem manda `Accept: application/x-ndjson` recebe a resposta em streaming, uma linha JSON por evento (`transcricao`, `resposta`, um `audio` por frase e `fim`, ou `erro`), o que deixa o satélite começar a falar na primeira frase; sem esse cabeçalho, vale o JSON de sempre;
 - a voz de resposta gerada no servidor, com o Piper, já sai no campo opcional `audio` da resposta: um WAV (16 bits, mono, 22.050 Hz) em base64, que só vem quando a voz do servidor está ligada. Para o ESP32, pode valer um endpoint que devolva o WAV direto, sem base64;
-- aceitar WAV 16 kHz, o formato natural do ESP32 (o servidor já repassa `audio/wav` ao Groq, mas ainda não foi testado com o áudio de um satélite);
+- aceitar WAV 16 kHz, o formato natural do ESP32: a simulação do "hey Jarvis" na página já manda o comando assim (testado com a transcrição falsa; falta confirmar com o Groq de verdade);
 - exigir token dos satélites quando o servidor aceitar conexões da rede (hoje o servidor não pede token em nenhum caso; por isso, por padrão, escuta só em `127.0.0.1`).
 
 ### Instalador do agente
@@ -128,6 +128,11 @@ Com a v0.1a e a v0.1b prontas, o MVP está completo.
 - [x] Gerar a voz de resposta no servidor com o Piper (vozes pt-BR mais naturais) e devolver o áudio junto com o texto no `/voz` (piper-tts 1.7.0, voz `pt_BR-cadu-medium`, opcional; sem ele, vale a voz do navegador)
 - [x] Manter um histórico curto da conversa para entender "agora apaga ela" (os últimos 4 pedidos de cada conversa, por até 5 minutos parada; a página manda um id por aba)
 - [x] Reduzir a latência com respostas em streaming: a voz vem frase a frase em NDJSON (o LLM continua sem stream, porque no Groq isso ganharia só ~0,1 s); além disso, a conexão com o Groq é reaproveitada e as ações que dão certo dispensam a 2ª rodada do LLM. Um "que horas são?" caiu de 5,7 s para perto de 1 s no servidor
+
+### Simulação do satélite na página (feita antes da v0.4)
+
+- [x] Ouvir o tempo todo e ativar com "hey Jarvis" no navegador, com o openWakeWord rodando localmente (onnxruntime-web): bipe, gravação do comando até o silêncio e envio de um WAV 16 kHz ao `/voz`, como o ESP32 vai fazer
+- [ ] Testar por voz, no dia a dia, com sotaque brasileiro de verdade, e ver se o limiar de 0,5 precisa de ajuste
 
 ### v0.4: instalador do agente
 
